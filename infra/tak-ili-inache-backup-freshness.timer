@@ -1,0 +1,12 @@
+[Unit]
+Description=Check Tak ili inache external-backup freshness
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=6h
+RandomizedDelaySec=10min
+Persistent=true
+Unit=tak-ili-inache-backup-freshness.service
+
+[Install]
+WantedBy=timers.target

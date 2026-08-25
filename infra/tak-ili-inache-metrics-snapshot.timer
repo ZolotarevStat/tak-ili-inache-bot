@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh Tak ili inache health metrics every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+RandomizedDelaySec=10s
+Persistent=true
+Unit=tak-ili-inache-metrics-snapshot.service
+
+[Install]
+WantedBy=timers.target

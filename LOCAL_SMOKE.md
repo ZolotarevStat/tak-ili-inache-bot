@@ -11,12 +11,12 @@ export TELEGRAM_BOT_TOKEN='<TEST_BOT_TOKEN>'
 PYTHONPATH=src python3 -m tak_ili_inache.polling
 ```
 
-Локальный suite перед smoke должен завершиться как `Ran 117 tests` и `OK`.
-Актуальная undeployed local identity:
+Локальный suite перед smoke должен завершиться как `Ran 145 tests` и `OK`.
+Актуальная active release identity:
 `0.1.0-cjm-v1-2-close-integrity-20260825-local`, runtime digest ×2
 `sha256:c68e07363c469eefa32f6f58d2ee3bfd8e00ecbad1d155294bd05bdf0bee5fa4`.
-Это только local PASS: staging, remote verification и Telegram smoke для этого
-candidate не выполнялись.
+Remote staging, activation and strict health passed; this document remains the
+bounded regression workflow for every future candidate.
 
 ## Обязательный внешний command-first canary
 

@@ -1,0 +1,398 @@
+#!/usr/bin/python3
+"""Root-only v6.3.7 installer with descriptor-pinned source staging.
+
+The source release must be the direct canonical child of
+/opt/tak-ili-inache/releases.  Every component is opened with O_NOFOLLOW and
+verified from its descriptor.  Each allowlisted file is copied from its opened
+descriptor, then re-opened by name and checked for identical identity/metadata.
+"""
+from __future__ import annotations
+
+import errno
+import os
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path, PurePath
+from typing import Callable, Final, Iterable
+
+from tii_infra_ops import assert_disabled_inactive
+
+
+CAPABILITY: Final = "tak-ili-inache-infra-admin:v6.3.7-operational-status"
+RELEASES_ROOT: Final = Path("/opt/tak-ili-inache/releases")
+INFRA_NAME: Final = "infra"
+SYSTEMCTL: Final = "/usr/bin/systemctl"
+SYSTEMD_ANALYZE: Final = "/usr/bin/systemd-analyze"
+VISUDO: Final = "/usr/sbin/visudo"
+PYTHON: Final = "/usr/bin/python3"
+SOURCE_FILES: Final = (
+    "tak-ili-inache-infra-admin",
+    "tak-ili-inache-infra-admin.capability",
+    "tak-ili-inache-infra-admin.sudoers",
+    "tak-ili-inache-infra-upgrade",
+    "tii_infra_ops.py",
+    "tii_infra_digest.py",
+    "tak-ili-inache-backup-run",
+    "tak-ili-inache-backup-freshness-run",
+    "tak-ili-inache-alloy-run",
+    "tak-ili-inache-metrics-snapshot",
+    "tak-ili-inache-backup.service",
+    "tak-ili-inache-backup.timer",
+    "tak-ili-inache-backup-freshness.service",
+    "tak-ili-inache-backup-freshness.timer",
+    "tak-ili-inache-metrics-snapshot.service",
+    "tak-ili-inache-metrics-snapshot.timer",
+    "tak-ili-inache-alloy.service",
+    "tak-ili-inache-alloy.config.alloy",
+)
+UNIT_NAMES: Final = (
+    "tak-ili-inache-backup.service",
+    "tak-ili-inache-backup.timer",
+    "tak-ili-inache-backup-freshness.service",
+    "tak-ili-inache-backup-freshness.timer",
+    "tak-ili-inache-metrics-snapshot.service",
+    "tak-ili-inache-metrics-snapshot.timer",
+    "tak-ili-inache-alloy.service",
+)
+PROTECTED_FILES: Final = (
+    Path("/etc/tak-ili-inache-backup.env"),
+    Path("/etc/tak-ili-inache-restic-password"),
+    Path("/etc/tak-ili-inache-grafana.env"),
+)
+INSTALLS: Final = (
+    ("tak-ili-inache-infra-admin", "/usr/local/sbin/tak-ili-inache-infra-admin", 0o750),
+    ("tak-ili-inache-infra-admin.sudoers", "/etc/sudoers.d/tak-ili-inache-admin", 0o440),
+    ("tii_infra_ops.py", "/usr/local/libexec/tak-ili-inache/tii_infra_ops.py", 0o644),
+    ("tii_infra_digest.py", "/usr/local/libexec/tak-ili-inache/tii_infra_digest.py", 0o644),
+    ("tak-ili-inache-backup-run", "/usr/local/libexec/tak-ili-inache/tak-ili-inache-backup-run", 0o750),
+    ("tak-ili-inache-backup-freshness-run", "/usr/local/libexec/tak-ili-inache/tak-ili-inache-backup-freshness-run", 0o750),
+    ("tak-ili-inache-alloy-run", "/usr/local/libexec/tak-ili-inache/tak-ili-inache-alloy-run", 0o750),
+    ("tak-ili-inache-metrics-snapshot", "/usr/local/libexec/tak-ili-inache/tak-ili-inache-metrics-snapshot", 0o750),
+    ("tak-ili-inache-backup.service", "/etc/systemd/system/tak-ili-inache-backup.service", 0o644),
+    ("tak-ili-inache-backup.timer", "/etc/systemd/system/tak-ili-inache-backup.timer", 0o644),
+    ("tak-ili-inache-backup-freshness.service", "/etc/systemd/system/tak-ili-inache-backup-freshness.service", 0o644),
+    ("tak-ili-inache-backup-freshness.timer", "/etc/systemd/system/tak-ili-inache-backup-freshness.timer", 0o644),
+    ("tak-ili-inache-metrics-snapshot.service", "/etc/systemd/system/tak-ili-inache-metrics-snapshot.service", 0o644),
+    ("tak-ili-inache-metrics-snapshot.timer", "/etc/systemd/system/tak-ili-inache-metrics-snapshot.timer", 0o644),
+    ("tak-ili-inache-alloy.service", "/etc/systemd/system/tak-ili-inache-alloy.service", 0o644),
+    ("tak-ili-inache-alloy.config.alloy", "/etc/tak-ili-inache/alloy/config.alloy", 0o640),
+)
+
+
+class SourceTrustError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class CreatedProtectedFile:
+    path: Path
+    identity: tuple[int, int, int, int, int, int, int, int]
+
+
+def _identity(info: os.stat_result) -> tuple[int, int, int, int, int, int, int, int]:
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _safe_mode(info: os.stat_result, *, directory: bool, owner: int, group: int) -> None:
+    if (not stat.S_ISDIR(info.st_mode) if directory else not stat.S_ISREG(info.st_mode)):
+        raise SourceTrustError("source component has invalid type")
+    if info.st_uid != owner or info.st_gid != group or stat.S_IMODE(info.st_mode) & 0o022:
+        raise SourceTrustError("source component ownership or mode is unsafe")
+
+
+def _open_dir_component(parent_fd: int, name: str, *, owner: int, group: int) -> int:
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    try:
+        descriptor = os.open(name, flags, dir_fd=parent_fd)
+    except OSError as exc:
+        raise SourceTrustError("source directory component is missing or symlinked") from exc
+    try:
+        _safe_mode(os.fstat(descriptor), directory=True, owner=owner, group=group)
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+@dataclass
+class PinnedRelease:
+    release_fd: int
+    infra_fd: int
+    release_path: Path
+
+    def close(self) -> None:
+        os.close(self.infra_fd)
+        os.close(self.release_fd)
+
+
+def open_direct_canonical_release(
+    release_path: Path,
+    *,
+    releases_root: Path = RELEASES_ROOT,
+    trusted_anchor: Path = Path("/"),
+    owner: int = 0,
+    group: int = 0,
+) -> PinnedRelease:
+    """Pin every direct canonical path component; nested releases are rejected."""
+    supplied = os.fspath(release_path)
+    if supplied != os.path.abspath(supplied):
+        raise SourceTrustError("release path is not canonical")
+    release_path = Path(supplied)
+    releases_root = Path(os.path.abspath(releases_root))
+    trusted_anchor = Path(os.path.abspath(trusted_anchor))
+    if release_path.parent != releases_root or release_path.name in {"", ".", ".."}:
+        raise SourceTrustError("release must be a direct child of releases directory")
+    if releases_root.parent == releases_root or not release_path.name.replace("-", "a").replace("_", "a").replace(".", "a").isalnum():
+        raise SourceTrustError("release identifier is invalid")
+    try:
+        relative_root = releases_root.relative_to(trusted_anchor)
+    except ValueError as exc:
+        raise SourceTrustError("releases path escapes trusted anchor") from exc
+    anchor_fd = os.open(trusted_anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    descriptors = [anchor_fd]
+    try:
+        _safe_mode(os.fstat(anchor_fd), directory=True, owner=owner, group=group)
+        current_fd = anchor_fd
+        for component in (*relative_root.parts, release_path.name):
+            current_fd = _open_dir_component(current_fd, component, owner=owner, group=group)
+            descriptors.append(current_fd)
+        release_fd = descriptors[-1]
+        infra_fd = _open_dir_component(release_fd, INFRA_NAME, owner=owner, group=group)
+        descriptors.append(infra_fd)
+        for descriptor in descriptors[:-2]:
+            os.close(descriptor)
+        return PinnedRelease(release_fd=release_fd, infra_fd=infra_fd, release_path=release_path)
+    except BaseException:
+        for descriptor in reversed(descriptors):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        raise
+
+
+def copy_allowlisted_file_from_fd(
+    infra_fd: int,
+    name: str,
+    stage: Path,
+    *,
+    between_validation_and_copy: Callable[[str], None] | None = None,
+    owner: int = 0,
+    group: int = 0,
+) -> None:
+    """Copy from a pinned FD and detect a replacement of the source directory entry."""
+    try:
+        source_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=infra_fd)
+    except OSError as exc:
+        raise SourceTrustError("source file is missing or symlinked") from exc
+    try:
+        before = os.fstat(source_fd)
+        _safe_mode(before, directory=False, owner=owner, group=group)
+        if between_validation_and_copy is not None:
+            between_validation_and_copy(name)
+        target = stage / name
+        target_fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, stat.S_IMODE(before.st_mode))
+        try:
+            while block := os.read(source_fd, 1024 * 1024):
+                os.write(target_fd, block)
+            os.fsync(target_fd)
+            os.fchmod(target_fd, stat.S_IMODE(before.st_mode))
+        finally:
+            os.close(target_fd)
+        after = os.fstat(source_fd)
+        if _identity(before) != _identity(after):
+            raise SourceTrustError("opened source changed during copy")
+        check_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=infra_fd)
+        try:
+            if _identity(before) != _identity(os.fstat(check_fd)):
+                raise SourceTrustError("source entry changed during copy")
+        finally:
+            os.close(check_fd)
+    finally:
+        os.close(source_fd)
+
+
+def stage_release_sources(release_path: Path, stage: Path, *, releases_root: Path = RELEASES_ROOT, trusted_anchor: Path = Path("/"), owner: int = 0, group: int = 0, between_validation_and_copy: Callable[[str], None] | None = None) -> None:
+    pinned = open_direct_canonical_release(release_path, releases_root=releases_root, trusted_anchor=trusted_anchor, owner=owner, group=group)
+    try:
+        for name in SOURCE_FILES:
+            copy_allowlisted_file_from_fd(pinned.infra_fd, name, stage, owner=owner, group=group, between_validation_and_copy=between_validation_and_copy)
+    finally:
+        pinned.close()
+
+
+def _run(command: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(command, check=check, text=True, env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8"}, capture_output=False)
+
+
+def assert_units_disabled_inactive() -> None:
+    assert_disabled_inactive(UNIT_NAMES)
+
+
+def _safe_existing(path: Path) -> None:
+    if path.exists() and path.is_symlink():
+        raise RuntimeError("destination symlink is unsafe")
+
+
+def _copy_install(source: Path, target: Path, mode: int) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    _safe_existing(target)
+    temporary = target.with_name(f".{target.name}.v62")
+    if temporary.exists():
+        temporary.unlink()
+    shutil.copyfile(source, temporary)
+    os.chown(temporary, 0, 0)
+    os.chmod(temporary, mode)
+    os.replace(temporary, target)
+
+
+def _protected_file_info(info: os.stat_result, *, owner: int, group: int) -> None:
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != owner or info.st_gid != group or stat.S_IMODE(info.st_mode) != 0o600:
+        raise RuntimeError("protected file metadata is unsafe")
+
+
+def create_protected_file(path: Path, created: list[CreatedProtectedFile], *, owner: int = 0, group: int = 0) -> None:
+    """Fail closed for every existing type, including a dangling symlink."""
+    try:
+        entry = os.lstat(path)
+    except FileNotFoundError:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
+        try:
+            descriptor = os.open(path, flags, 0o600)
+        except FileExistsError as exc:
+            raise RuntimeError("protected file appeared during creation") from exc
+        try:
+            created_info = os.fstat(descriptor)
+            _protected_file_info(created_info, owner=owner, group=group)
+            created.append(CreatedProtectedFile(path=path, identity=_identity(created_info)))
+        finally:
+            os.close(descriptor)
+        return
+    if stat.S_ISLNK(entry.st_mode):
+        raise RuntimeError("protected file symlink is unsafe")
+    _protected_file_info(entry, owner=owner, group=group)
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as exc:
+        raise RuntimeError("protected file cannot be opened without following links") from exc
+    try:
+        if _identity(entry) != _identity(os.fstat(descriptor)):
+            raise RuntimeError("protected file changed during validation")
+    finally:
+        os.close(descriptor)
+
+
+def _backup_existing(destinations: Iterable[Path], backup_dir: Path) -> None:
+    backup_dir.mkdir(parents=True, mode=0o700)
+    os.chown(backup_dir, 0, 0)
+    for target in destinations:
+        key = str(target).replace("/", "_")
+        _safe_existing(target)
+        if target.exists():
+            shutil.copy2(target, backup_dir / key)
+        else:
+            (backup_dir / f"{key}.absent").touch()
+
+
+def _remove_created_protected(created: Iterable[CreatedProtectedFile]) -> None:
+    for record in created:
+        try:
+            current = os.lstat(record.path)
+        except FileNotFoundError:
+            continue
+        if stat.S_ISREG(current.st_mode) and _identity(current) == record.identity:
+            os.unlink(record.path)
+
+
+def _restore_existing(destinations: Iterable[Path], backup_dir: Path, created: Iterable[CreatedProtectedFile]) -> None:
+    for target in destinations:
+        key = str(target).replace("/", "_")
+        saved, absent = backup_dir / key, backup_dir / f"{key}.absent"
+        if absent.exists():
+            target.unlink(missing_ok=True)
+        elif saved.exists():
+            _copy_install(saved, target, stat.S_IMODE(saved.stat().st_mode))
+    _remove_created_protected(created)
+    _run([SYSTEMCTL, "daemon-reload"], check=False)
+
+
+def install_from_stage(stage: Path) -> None:
+    Path("/usr/local/libexec/tak-ili-inache").mkdir(parents=True, exist_ok=True)
+    Path("/etc/tak-ili-inache/alloy").mkdir(parents=True, exist_ok=True)
+    for directory in (Path("/var/lib/tak-ili-inache-alloy"), Path("/var/lib/tak-ili-inache-metrics")):
+        directory.mkdir(parents=True, exist_ok=True)
+        os.chown(directory, 0, 0)
+        os.chmod(directory, 0o750)
+    destinations = [Path(target) for _, target, _ in INSTALLS]
+    backup_dir = Path("/var/backups/tak-ili-inache-infra-upgrade") / f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{os.getpid()}"
+    created: list[CreatedProtectedFile] = []
+    armed = False
+    try:
+        _backup_existing(destinations, backup_dir)
+        armed = True
+        for source, target, mode in INSTALLS:
+            _copy_install(stage / source, Path(target), mode)
+        for secret in PROTECTED_FILES:
+            create_protected_file(secret, created)
+        _run([SYSTEMCTL, "daemon-reload"])
+        _run([SYSTEMD_ANALYZE, "verify", *[f"/etc/systemd/system/{unit}" for unit in UNIT_NAMES]])
+        _run([VISUDO, "-cf", "/etc/sudoers.d/tak-ili-inache-admin"])
+        result = subprocess.run(["/usr/local/sbin/tak-ili-inache-infra-admin", "capability"], text=True, capture_output=True, env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8"})
+        if result.returncode != 0 or result.stdout.strip() != f"infra_capability={CAPABILITY}":
+            raise RuntimeError("installed infrastructure capability mismatch")
+        assert_units_disabled_inactive()
+    except BaseException:
+        if armed:
+            _restore_existing(destinations, backup_dir, created)
+        raise
+
+
+def verify_staged_package(stage: Path) -> str:
+    capability = (stage / "tak-ili-inache-infra-admin.capability").read_text(encoding="utf-8").strip()
+    if capability != CAPABILITY:
+        raise SourceTrustError("unexpected staged infra capability")
+    digest = subprocess.run([PYTHON, str(stage / "tii_infra_digest.py"), "--root", str(stage)], check=True, text=True, capture_output=True, env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8"}).stdout.strip()
+    _run([PYTHON, "-m", "py_compile", str(stage / "tii_infra_ops.py"), str(stage / "tii_infra_digest.py"), str(stage / "tak-ili-inache-infra-upgrade")])
+    _run(["/bin/bash", "-n", *[str(stage / name) for name in ("tak-ili-inache-infra-admin", "tak-ili-inache-backup-run", "tak-ili-inache-backup-freshness-run", "tak-ili-inache-alloy-run")]])
+    _run([VISUDO, "-cf", str(stage / "tak-ili-inache-infra-admin.sudoers")])
+    return digest
+
+
+def main() -> None:
+    if os.geteuid() != 0 or len(sys.argv) != 2:
+        raise SystemExit(f"usage: root {sys.argv[0]} <direct-release-dir>")
+    release = Path(sys.argv[1])
+    expected_script = release / INFRA_NAME / "tak-ili-inache-infra-upgrade"
+    if Path(os.path.abspath(__file__)) != expected_script:
+        raise SourceTrustError("installer must run from the direct verified release path")
+    lock_path = Path("/run/lock/tak-ili-inache-infra-upgrade.lock")
+    import fcntl
+    with lock_path.open("w", encoding="ascii") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError("infra upgrade already running") from exc
+        with tempfile.TemporaryDirectory(prefix="tak-ili-inache-infra-v637.", dir="/var/tmp") as temporary:
+            stage = Path(temporary) / "source"
+            stage.mkdir(mode=0o700)
+            stage_release_sources(release, stage)
+            digest = verify_staged_package(stage)
+            assert_units_disabled_inactive()
+            install_from_stage(stage)
+            print(f"infra_source_digest={digest}")
+            print(f"infra_wrapper_capability={CAPABILITY}")
+            print("infra_units=installed-disabled")
+            print("alloy_binary_gate=required-before-enable")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (SourceTrustError, RuntimeError, OSError, subprocess.CalledProcessError) as exc:
+        print(f"tak-ili-inache infra upgrade failed: {type(exc).__name__}", file=sys.stderr)
+        raise SystemExit(1) from exc

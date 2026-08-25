@@ -1,7 +1,7 @@
-# Production runbook — «Так или иначе» на Sprintbox
+# Production runbook — «Так или иначе» на VDS
 
 Назначение: один постоянно работающий Telegram long-polling worker для
-`tak_ili_inache` на Sprintbox Student / Debian 13. Этот пакет не содержит
+`tak_ili_inache` на совместимом Debian 13 VDS. Этот пакет не содержит
 реальных token, Telegram ID, S3 credentials или данных участников.
 
 Внешний Telegram smoke — единственный открытый release gate. До него нельзя
@@ -11,7 +11,7 @@
 
 | Назначение | Значение |
 |---|---|
-| VDS | Sprintbox Student, Debian 13, 1 vCPU, 550 MiB RAM, 7 GB NVMe |
+| VDS | `<VDS_PROVIDER>`, Debian 13, 1 vCPU, 550 MiB RAM, 7 GB NVMe |
 | systemd unit | `tak-ili-inache.service` |
 | worker user | `takiliinache` |
 | release dirs | `/opt/tak-ili-inache/releases/<release-id>` |
@@ -26,9 +26,9 @@
 | disk policy | journald max 100 MiB; current release plus two previous releases |
 
 Long polling использует исходящий HTTPS к Telegram. Не нужны домен, nginx,
-webhook, TLS и входящие 80/443. В Sprintbox включить panel firewall с одним
-правилом TCP/22 от актуального IP ноутбука; UFW повторяет этот deny-by-default
-контур внутри VDS. [Sprintbox firewall](https://help.sprintbox.ru/network/firewall).
+webhook, TLS и входящие 80/443. В панели `<VDS_PROVIDER>` включить firewall с
+одним правилом TCP/22 от актуального IP ноутбука; UFW повторяет этот
+deny-by-default контур внутри VDS.
 
 ## Environment contract
 
@@ -53,28 +53,28 @@ attempt. `auto` допустим только после отдельно зад
 закрепляются.
 
 Внешний backup намеренно provider-neutral: restic принимает любой private
-S3-compatible repository вне Sprintbox account. В `/etc/tak-ili-inache-backup.env`
+S3-compatible repository вне account `<VDS_PROVIDER>`. В `/etc/tak-ili-inache-backup.env`
 используется шаблон `deploy/tak-ili-inache-backup.env.example`; credential должен
 иметь доступ только к одному private bucket. Без этих credentials backup timers
 не включать.
 
-## 1. Bootstrap Sprintbox
+## 1. Bootstrap VDS
 
 На ноутбуке ключ уже существует:
 
 ```bash
-ssh -i ~/.ssh/sprintbox_tak_ili_inache root@<SPRINTBOX_IP>
+ssh -i ~/.ssh/<VDS_ADMIN_KEY> root@<VDS_HOST>
 ```
 
 До отключения root/password login создать `admin`, установить **только public
 key**, затем в отдельном терминале подтвердить key-only вход `admin`:
 
 ```bash
-scp -i ~/.ssh/sprintbox_tak_ili_inache \
-  ~/.ssh/sprintbox_tak_ili_inache.pub \
-  root@<SPRINTBOX_IP>:/tmp/tak-ili-inache-admin.pub
+scp -i ~/.ssh/<VDS_ADMIN_KEY> \
+  ~/.ssh/<VDS_ADMIN_KEY>.pub \
+  root@<VDS_HOST>:/tmp/tak-ili-inache-admin.pub
 
-ssh -i ~/.ssh/sprintbox_tak_ili_inache root@<SPRINTBOX_IP> '
+ssh -i ~/.ssh/<VDS_ADMIN_KEY> root@<VDS_HOST> '
   set -eu
   apt update
   DEBIAN_FRONTEND=noninteractive apt -y full-upgrade
@@ -91,15 +91,15 @@ ssh -i ~/.ssh/sprintbox_tak_ili_inache root@<SPRINTBOX_IP> '
   install -d -o root -g root -m 0755 /usr/local/libexec/tak-ili-inache
 '
 
-ssh -i ~/.ssh/sprintbox_tak_ili_inache admin@<SPRINTBOX_IP> 'id -un'
+ssh -i ~/.ssh/<VDS_ADMIN_KEY> admin@<VDS_HOST> 'id -un'
 ```
 
 Только после успешного последнего вызова, не закрывая работающий root-сеанс,
 отключить root/password **только для SSH**. Вход root через VNC/emergency console
-Sprintbox не меняется:
+`<VDS_PROVIDER>` не меняется:
 
 ```bash
-ssh -i ~/.ssh/sprintbox_tak_ili_inache root@<SPRINTBOX_IP> '
+ssh -i ~/.ssh/<VDS_ADMIN_KEY> root@<VDS_HOST> '
   set -eu
   install -d -m 0755 /etc/ssh/sshd_config.d
   tee /etc/ssh/sshd_config.d/99-tak-ili-inache.conf >/dev/null <<"EOF"
@@ -119,13 +119,13 @@ EOF
   test "$(ufw status | grep -c "22/tcp")" -ge 1
 '
 
-ssh -i ~/.ssh/sprintbox_tak_ili_inache admin@<SPRINTBOX_IP> 'sudo -n systemctl is-active ssh'
+ssh -i ~/.ssh/<VDS_ADMIN_KEY> admin@<VDS_HOST> 'sudo -n systemctl is-active ssh'
 ```
 
 Создать swap и ограничения journald:
 
 ```bash
-ssh -i ~/.ssh/sprintbox_tak_ili_inache admin@<SPRINTBOX_IP> '
+ssh -i ~/.ssh/<VDS_ADMIN_KEY> admin@<VDS_HOST> '
   set -eu
   sudo test ! -e /swapfile
   sudo fallocate -l 1G /swapfile
@@ -139,12 +139,12 @@ ssh -i ~/.ssh/sprintbox_tak_ili_inache admin@<SPRINTBOX_IP> '
 
 ## 2. Local verification and release identity
 
-Текущий **undeployed local-only** candidate:
+Текущий активный application release:
 `0.1.0-cjm-v1-2-close-integrity-20260825-local`; suite contract
-`Ran 117 tests` / `OK`; runtime digest ×2
+`Ran 145 tests` / `OK`; runtime digest ×2
 `sha256:c68e07363c469eefa32f6f58d2ee3bfd8e00ecbad1d155294bd05bdf0bee5fa4`.
-Эта запись не является remote/staging PASS: перед любым switch обязательны все
-remote checks ниже с тем же release ID, test count и digest.
+Immutable remote staging, transactional activation and strict health already
+passed for this identity. Repeat the checks below for every future release.
 
 ```bash
 cd <PROJECT_DIR>
@@ -165,7 +165,7 @@ Set the release ID after the digest is recorded in the deployment evidence:
 
 ```bash
 export TII_RELEASE_ID="0.1.0-cjm-v1-2-close-integrity-20260825-local"
-export TII_VDS_IP=<SPRINTBOX_IP>
+export TII_VDS_HOST=<VDS_HOST>
 ```
 
 ## 3. Atomic remote installation and remote checks
@@ -178,8 +178,8 @@ rsync -az --delete \
   --exclude .git --exclude .env --exclude .venv --exclude build \
   --exclude '*.egg-info' --exclude __pycache__ --exclude '*.pyc' \
   --exclude output --exclude '*.log' \
-  -e 'ssh -i ~/.ssh/sprintbox_tak_ili_inache' \
-  ./ "admin@${TII_VDS_IP}:/srv/tak-ili-inache/incoming/${TII_RELEASE_ID}/"
+  -e 'ssh -i ~/.ssh/<VDS_ADMIN_KEY>' \
+  ./ "admin@${TII_VDS_HOST}:/srv/tak-ili-inache/incoming/${TII_RELEASE_ID}/"
 ```
 
 On the VDS, install and validate before switching `current`:
@@ -371,11 +371,98 @@ new empty directory, run `tak_ili_inache.health` there, then atomically replace
 ## 6. Routine operations
 
 ```bash
-ssh -i ~/.ssh/sprintbox_tak_ili_inache admin@<SPRINTBOX_IP> 'sudo /usr/local/sbin/tak-ili-inache-admin status'
-ssh -i ~/.ssh/sprintbox_tak_ili_inache admin@<SPRINTBOX_IP> 'sudo /usr/local/sbin/tak-ili-inache-admin journal'
-ssh -i ~/.ssh/sprintbox_tak_ili_inache admin@<SPRINTBOX_IP> 'sudo /usr/local/sbin/tak-ili-inache-admin restart'
+ssh -i ~/.ssh/<VDS_ADMIN_KEY> admin@<VDS_HOST> 'sudo /usr/local/sbin/tak-ili-inache-admin status'
+ssh -i ~/.ssh/<VDS_ADMIN_KEY> admin@<VDS_HOST> 'sudo /usr/local/sbin/tak-ili-inache-admin journal'
+ssh -i ~/.ssh/<VDS_ADMIN_KEY> admin@<VDS_HOST> 'sudo /usr/local/sbin/tak-ili-inache-admin restart'
 ```
 
 Never show the env file in terminal output or chat. If a token is suspected to
 be exposed, rotate it in BotFather, replace only the env value with `sudoedit`,
 and restart the worker after the new token has been verified.
+
+## 7. Infrastructure readiness — S3 and Grafana (2026-08-25)
+
+### V6.3.7 S3-accepted package — current infra identity
+
+Независимый audit запретил предыдущий v6 package: он считывал редактируемый
+администратором env как shell-код и валидировал install sources до закрытого
+staging. Его нельзя устанавливать. Единственный допустимый пакет теперь
+`0.1.0-infra-v6.3.7-20260825-local` из `infra/`; он не меняет application release
+surface (runtime digest приложения остаётся
+`sha256:c68e07363c469eefa32f6f58d2ee3bfd8e00ecbad1d155294bd05bdf0bee5fa4`).
+
+Root installer принимает только direct canonical child
+`/opt/tak-ili-inache/releases/<release-id>`: любое nesting, `..` или symlink
+rejected. Он закрепляет каждый component descriptor-ом (`O_NOFOLLOW`), проверяет
+root ownership/mode, копирует **явный** список source files из opened FD в `0700`
+root-private `mktemp -d` stage и повторно проверяет inode/size/metadata исходной
+directory entry после copy. Только staged copies участвуют в digest, syntax,
+`visudo`, `systemd-analyze` и install. До любой mutation и после install он требует, чтобы
+все новые backup/freshness/metrics/Alloy units были disabled и inactive. Активный
+unit — fail-before-mutation, а не скрытый stop/disable. Ошибка после начала
+install откатывает только собственные files/sudoers/units/placeholders.
+
+В protected backup/Grafana files допускается только exact `KEY=value` allowlist:
+unknown/duplicate/malformed key, whitespace/control/newline и shell metacharacter
+rejected. Файлы никогда не `source`-ятся. Все дочерние restic/systemctl/runuser/
+Alloy processes получают очищенный environment и абсолютные executable paths.
+Shell-based root units не используют `EnvironmentFile`.
+
+Root-console command после immutable staging и independent digest audit:
+
+```bash
+sudo /usr/bin/python3 \
+  "/opt/tak-ili-inache/releases/0.1.0-infra-v6.3.7-20260825-local/infra/tak-ili-inache-infra-upgrade" \
+  "/opt/tak-ili-inache/releases/0.1.0-infra-v6.3.7-20260825-local"
+```
+
+Ожидаемые безопасные строки (точный digest указан в `RELEASE_MANIFEST.md`):
+
+```text
+infra_source_digest=sha256:c0b26c063b1417e96b10592e402f72ae42ff7e7cd12c873c32a702cbce0810c7
+infra_wrapper_capability=tak-ili-inache-infra-admin:v6.3.7-operational-status
+infra_units=installed-disabled
+alloy_binary_gate=required-before-enable
+```
+
+Install не читает secret values, не запускает worker/backup/Alloy/timer и не
+трогает `/var/lib/tak-ili-inache` или `current`. После install владелец вносит
+значения только через `sudoedit` exact protected paths; дальше sequence остаётся
+`backup-init → backup-run → backup-restore-verify → backup-enable`. Isolated
+restore rejects every symlink and special file, checks canonical containment
+before `chown` or health. Alloy reads the textfile metrics directory only and
+writes лишь собственный `/var/lib/tak-ili-inache-alloy`.
+
+Private bucket `<PRIVATE_BACKUP_BUCKET>` is owner-verified; region and endpoint
+remain local-only. The restic repository template is
+`s3:https://<PRIVATE_S3_ENDPOINT>/<PRIVATE_BACKUP_BUCKET>/<PRIVATE_REPOSITORY_PREFIX>`. Backup includes
+runtime/scoring/leaderboard CSV and excludes `*.png`; an independent
+out-of-provider copy remains a later resilience layer.
+
+V5–v6.3.6 are historical and superseded for the infrastructure contour.
+V6.3.7 keeps the fail-closed installer and adds three production fixes proven on
+the VDS: restic holds the application `.repository.lock` while scanning CSV;
+isolated restore gives the worker traversal of the private temporary parent only
+after root-side tree validation; operational status accepts stable active timers
+without weakening install preflight. The installed sudoers remains fixed and
+does not grant an arbitrary shell.
+
+The app env must not be reused for S3. The authorised S3 secret-file paths are:
+
+```bash
+sudoedit /etc/tak-ili-inache-backup.env
+sudoedit /etc/tak-ili-inache-restic-password
+```
+
+The 2026-08-25 S3 acceptance completed in this exact order: config validation →
+restic init → coherent backup → isolated restore → `data_ok=true` → enable both
+timers → manual freshness service `success/0`. The private credentials remain
+only in root-owned `0600` files. Current status must show both backup timers as
+`enabled active`; metrics timer and Alloy remain `disabled inactive`.
+
+Grafana alert-bot credentials stay in Grafana Cloud Contact Points, never on the
+VDS. The only VDS Grafana secret will be the metrics-write key in
+`/etc/tak-ili-inache-grafana.env`. Alloy remains disabled until its binary and
+those credentials are present; it then uses the fixed `alloy-enable` command.
+No public endpoint, Loki log shipping, Telegram payload or product reminder is
+part of the S3 backup contour.

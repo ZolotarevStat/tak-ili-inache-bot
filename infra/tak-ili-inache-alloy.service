@@ -1,0 +1,39 @@
+[Unit]
+Description=Tak ili inache metrics-only Grafana Alloy
+Wants=network-online.target
+After=network-online.target
+# Debian 13 uses this supported existence condition. Executability remains an
+# explicit fail-closed check in tii_infra_ops.enable_alloy().
+ConditionPathExists=/usr/bin/alloy
+ConditionPathExists=/etc/tak-ili-inache-grafana.env
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/local/libexec/tak-ili-inache/tak-ili-inache-alloy-run
+Restart=on-failure
+RestartSec=30
+MemoryHigh=64M
+MemoryMax=96M
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectClock=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadOnlyPaths=/var/lib/tak-ili-inache-metrics
+ReadWritePaths=/var/lib/tak-ili-inache-alloy
+
+[Install]
+WantedBy=multi-user.target

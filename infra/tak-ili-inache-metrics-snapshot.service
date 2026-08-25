@@ -1,0 +1,28 @@
+[Unit]
+Description=Write secret-free Tak ili inache health metrics
+After=tak-ili-inache.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/libexec/tak-ili-inache/tak-ili-inache-metrics-snapshot
+TimeoutStartSec=30s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectClock=true
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadOnlyPaths=/var/lib/tak-ili-inache /opt/tak-ili-inache/current
+ReadWritePaths=/var/lib/tak-ili-inache-metrics

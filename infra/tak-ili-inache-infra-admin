@@ -1,0 +1,18 @@
+#!/bin/bash
+set -euo pipefail
+
+# Deliberately a tiny dispatcher: protected configuration is parsed only by
+# the non-eval Python implementation. No caller environment reaches it.
+readonly OPS=/usr/local/libexec/tak-ili-inache/tii_infra_ops.py
+readonly PYTHON=/usr/bin/python3
+
+case "${1:-}" in
+  capability|status|backup-init|backup-run|backup-restore-verify|backup-enable|alloy-enable)
+    [[ $# -eq 1 ]] || { echo "usage: tak-ili-inache-infra-admin <fixed-verb>" >&2; exit 64; }
+    exec /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 "$PYTHON" "$OPS" "$1"
+    ;;
+  *)
+    echo "usage: tak-ili-inache-infra-admin {capability|status|backup-init|backup-run|backup-restore-verify|backup-enable|alloy-enable}" >&2
+    exit 64
+    ;;
+esac

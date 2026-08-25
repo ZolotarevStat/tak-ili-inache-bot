@@ -1,0 +1,16 @@
+# Preserve v5 app-wrapper access and grant only fixed v6.3.7 infrastructure verbs.
+# There is no generic shell, no wildcard infrastructure command and no editor
+# outside the four exact protected files below.
+Cmnd_Alias TII_APP_ADMIN = /usr/local/sbin/tak-ili-inache-admin *
+Cmnd_Alias TII_INFRA_ADMIN = /usr/local/sbin/tak-ili-inache-infra-admin capability, \
+  /usr/local/sbin/tak-ili-inache-infra-admin status, \
+  /usr/local/sbin/tak-ili-inache-infra-admin backup-init, \
+  /usr/local/sbin/tak-ili-inache-infra-admin backup-run, \
+  /usr/local/sbin/tak-ili-inache-infra-admin backup-restore-verify, \
+  /usr/local/sbin/tak-ili-inache-infra-admin backup-enable, \
+  /usr/local/sbin/tak-ili-inache-infra-admin alloy-enable
+Cmnd_Alias TII_SECRET_EDIT = sudoedit /etc/tak-ili-inache.env, \
+  sudoedit /etc/tak-ili-inache-backup.env, \
+  sudoedit /etc/tak-ili-inache-restic-password, \
+  sudoedit /etc/tak-ili-inache-grafana.env
+admin ALL=(root) NOPASSWD: TII_APP_ADMIN, TII_INFRA_ADMIN, TII_SECRET_EDIT

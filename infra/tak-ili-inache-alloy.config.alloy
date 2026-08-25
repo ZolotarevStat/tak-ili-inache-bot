@@ -1,0 +1,30 @@
+// Metrics only. This config must never contain a Telegram token, user ID,
+// message content, S3 credential or Grafana API key.
+prometheus.remote_write "grafana_cloud" {
+  endpoint {
+    url = sys.env("GRAFANA_CLOUD_PROMETHEUS_URL")
+    basic_auth {
+      username = sys.env("GRAFANA_CLOUD_PROMETHEUS_USERNAME")
+      password = sys.env("GRAFANA_CLOUD_METRICS_API_KEY")
+    }
+    queue_config {
+      capacity            = 500
+      max_samples_per_send = 100
+      min_shards          = 1
+      max_shards          = 1
+    }
+  }
+}
+
+prometheus.exporter.unix "sprintbox" {
+  set_collectors = ["cpu", "filesystem", "loadavg", "meminfo", "systemd", "textfile"]
+  textfile {
+    directory = "/var/lib/tak-ili-inache-metrics"
+  }
+}
+
+prometheus.scrape "sprintbox" {
+  targets         = prometheus.exporter.unix.sprintbox.targets
+  scrape_interval = "60s"
+  forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
+}

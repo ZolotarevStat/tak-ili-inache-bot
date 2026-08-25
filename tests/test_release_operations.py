@@ -243,7 +243,7 @@ class ReleaseOperationsTests(unittest.TestCase):
         for artifact in (manifest, smoke, runbook):
             self.assertIn(candidate_id, artifact)
             self.assertIn(runtime_digest, artifact)
-            self.assertIn("Ran 117 tests", artifact)
+            self.assertIn("Ran 145 tests", artifact)
         self.assertIn("Sequential-round acceptance", smoke)
         self.assertRegex(runbook, r"Any active\s+`SMOKE-\*` round, before or after its deadline")
         self.assertNotIn("An expired\n`SMOKE-*` round", runbook)

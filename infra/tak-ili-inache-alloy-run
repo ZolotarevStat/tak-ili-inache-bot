@@ -1,0 +1,4 @@
+#!/bin/bash
+set -euo pipefail
+exec /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 \
+  /usr/bin/python3 /usr/local/libexec/tak-ili-inache/tii_infra_ops.py alloy-service

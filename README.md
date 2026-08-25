@@ -37,7 +37,7 @@ bash -n deploy/tak-ili-inache-admin \
   deploy/tak-ili-inache-prune-releases
 ```
 
-The audited candidate passed 117 unit/integration tests. See `LOCAL_SMOKE.md`
+The audited candidate passed 145 unit/integration tests. See `LOCAL_SMOKE.md`
 for the bounded tester workflow and `RUNBOOK.md` for deployment and recovery
 procedures. All addresses and identifiers in committed documentation are
 placeholders; secrets must be supplied only through the deployment environment.

@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""Write aggregate health metrics without exposing runtime data or secrets."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+CURRENT = Path("/opt/tak-ili-inache/current")
+DATA_DIR = Path("/var/lib/tak-ili-inache")
+METRICS_DIR = Path("/var/lib/tak-ili-inache-metrics")
+OUTPUT = METRICS_DIR / "tak_ili_inache.prom"
+
+
+def _timestamp(value: object) -> float:
+    if not isinstance(value, str) or not value:
+        return 0.0
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc).timestamp()
+
+
+def _gauge(value: object) -> int:
+    return 1 if value is True else 0
+
+
+def main() -> None:
+    result = subprocess.run(
+        [
+            str(CURRENT / ".venv/bin/python"),
+            "-m",
+            "tak_ili_inache.health",
+            "--data-dir",
+            str(DATA_DIR),
+            "--require-liveness",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    try:
+        report = json.loads(result.stdout)
+    except (TypeError, json.JSONDecodeError):
+        report = {}
+    liveness = report.get("liveness") if isinstance(report, dict) else {}
+    liveness = liveness if isinstance(liveness, dict) else {}
+    lines = [
+        "# HELP tak_ili_inache_health_ok Strict application health excluding outbound delivery.",
+        "# TYPE tak_ili_inache_health_ok gauge",
+        f"tak_ili_inache_health_ok {_gauge(report.get('ok') is True and result.returncode == 0)}",
+        "# HELP tak_ili_inache_delivery_ok Outbound delivery health.",
+        "# TYPE tak_ili_inache_delivery_ok gauge",
+        f"tak_ili_inache_delivery_ok {_gauge(report.get('delivery_ok'))}",
+        "# HELP tak_ili_inache_liveness_ok Polling liveness health.",
+        "# TYPE tak_ili_inache_liveness_ok gauge",
+        f"tak_ili_inache_liveness_ok {_gauge(liveness.get('ok'))}",
+        "# HELP tak_ili_inache_last_successful_poll_timestamp_seconds Unix timestamp of last successful poll.",
+        "# TYPE tak_ili_inache_last_successful_poll_timestamp_seconds gauge",
+        f"tak_ili_inache_last_successful_poll_timestamp_seconds {_timestamp(liveness.get('last_successful_poll_at')):.0f}",
+    ]
+    for name in ("handler_error_count", "polling_error_count", "reply_error_count"):
+        value = liveness.get(name, 0)
+        value = value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+        lines.extend((
+            f"# HELP tak_ili_inache_{name} Aggregate worker diagnostic counter.",
+            f"# TYPE tak_ili_inache_{name} counter",
+            f"tak_ili_inache_{name} {value}",
+        ))
+    lines.extend((
+        "# HELP tak_ili_inache_backup_configured Backup secret files have been configured.",
+        "# TYPE tak_ili_inache_backup_configured gauge",
+        f"tak_ili_inache_backup_configured {_gauge(Path('/etc/tak-ili-inache-backup.env').stat().st_size > 0 if Path('/etc/tak-ili-inache-backup.env').exists() else False)}",
+    ))
+    freshness_marker = METRICS_DIR / "backup_freshness_epoch"
+    try:
+        freshness_epoch = int(freshness_marker.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        freshness_epoch = 0
+    lines.extend((
+        "# HELP tak_ili_inache_backup_last_freshness_timestamp_seconds Unix timestamp of latest successful restic freshness check.",
+        "# TYPE tak_ili_inache_backup_last_freshness_timestamp_seconds gauge",
+        f"tak_ili_inache_backup_last_freshness_timestamp_seconds {max(freshness_epoch, 0)}",
+    ))
+    METRICS_DIR.mkdir(mode=0o750, parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".tak-ili-inache.", suffix=".prom", dir=METRICS_DIR)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o640)
+        os.replace(temporary, OUTPUT)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+if __name__ == "__main__":
+    main()
