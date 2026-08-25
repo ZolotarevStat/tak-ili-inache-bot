@@ -116,12 +116,20 @@ class BotService:
         if message.get("document"):
             self._handle_document(message)
             return
-        text = (message.get("text") or "").split()[0].lower()
+        text_parts = (message.get("text") or "").split()
+        text = text_parts[0].lower() if text_parts else ""
+        # Telegram commonly sends commands addressed to a specific bot as
+        # `/command@bot_username` in groups. The update has already reached
+        # this bot, so route the command through the same allowlist as its bare
+        # form instead of treating the suffix as an unknown command.
+        if text.startswith("/") and "@" in text:
+            text = text.split("@", 1)[0]
         if text in {"/help", "/rules"}:
             self.telegram.send_message(chat["id"], self._help() if text == "/help" else self._rules())
             return
         if chat.get("type") not in PRIVATE_TYPES:
-            self.telegram.send_message(chat["id"], "Сбор и просмотр прогнозов доступны только в личном чате с ботом.")
+            if text in {"/start", "/predict", "/new", "/my", "/admin", "/status", "/publish", "/score"}:
+                self.telegram.send_message(chat["id"], "Сбор и просмотр прогнозов доступны только в личном чате с ботом.")
             return
         telegram_id = str(user["id"])
         display_name = " ".join(filter(None, [user.get("first_name"), user.get("last_name")])) or user.get("username", "Участник")
@@ -342,25 +350,33 @@ class BotService:
             predictions = len(self.repository.latest_predictions(round_.round_id))
             result_count = len(self.repository.results(round_.round_id))
             stage = "open" if self.now() < round_.deadline_msk else "locked"
-            if round_.round_id.startswith("SMOKE-"):
-                stage = "open (тестовый)" if self.now() < round_.deadline_msk else "results/scoring (тестовый)"
-                buttons += [("Закрыть тестовый тур без расчёта", "admin:close")]
-                action_lines.append("🧪 Тестовый тур можно закрыть без расчёта в любой момент; история сохранится")
-            elif self.repository.round_scored(round_.round_id):
-                stage = "scored"
-                buttons += [("Завершить и архивировать тур", "admin:close")]
-                action_lines.append("✅ Расчёт завершён — следующий шаг: архивировать тур")
-            elif self.now() >= round_.deadline_msk and result_count < len(round_.fixtures):
-                stage = "results"
-                buttons += [("Внести результаты", "admin:results")]
-                action_lines.append("🧾 Следующий шаг: внести результаты всех матчей")
-            elif self.now() >= round_.deadline_msk:
-                stage = "scoring"
-                buttons += [("Скоринг", "admin:score")]
-                action_lines.append("🧮 Следующий шаг: рассчитать результаты")
-            else:
-                buttons += [("Статус сдачи", "admin:status")]
+            smoke = round_.round_id.startswith("SMOKE-")
+            buttons.append(("Статус сдачи", "admin:status"))
+            if self.now() < round_.deadline_msk:
                 action_lines.append("🔓 Тур открыт до дедлайна")
+                if smoke:
+                    stage = "open (тестовый)"
+                    buttons += [("Закрыть тестовый тур без расчёта", "admin:close")]
+                    action_lines.append("🧪 Тестовый тур можно закрыть без расчёта в любой момент; история сохранится")
+            else:
+                buttons += [("Опубликовать прогнозы", "admin:publish")]
+                action_lines.append("🔒 Прогнозы можно опубликовать после дедлайна")
+                if smoke:
+                    stage = "results/scoring (тестовый)"
+                    buttons += [("Закрыть тестовый тур без расчёта", "admin:close")]
+                    action_lines.append("🧪 Тестовый тур можно закрыть без расчёта в любой момент; история сохранится")
+                elif self.repository.round_scored(round_.round_id):
+                    stage = "scored"
+                    buttons += [("Завершить и архивировать тур", "admin:close")]
+                    action_lines.append("✅ Расчёт завершён — следующий шаг: архивировать тур")
+                elif result_count < len(round_.fixtures):
+                    stage = "results"
+                    buttons += [("Внести результаты", "admin:results")]
+                    action_lines.append("🧾 Следующий шаг: внести результаты всех матчей")
+                else:
+                    stage = "scoring"
+                    buttons += [("Скоринг", "admin:score")]
+                    action_lines.append("🧮 Следующий шаг: рассчитать результаты")
         else:
             predictions = result_count = 0
             stage = "архивирован / нет активного"

@@ -45,6 +45,24 @@ Planning-документы, audits, tests, runtime data, venv и build products
 
 ## Verification results
 
+## Group/admin UX P1 candidate — LOCAL PASS / DEPLOY PENDING
+
+| Field | Value |
+|---|---|
+| Release ID | `0.1.0-group-admin-ux-p1-20260825-local` |
+| Runtime digest ×2 | `sha256:eb73b60883f676656e474c9b25399f6b0545c77761eee58b12a2c5821e5bbc92` |
+| Scope | command `@username` normalization; silent ordinary group updates; safe private redirect; stage-aware status/publish/results/scoring buttons |
+| Domain/data delta | none; prediction rules, persistence, scoring, transport and active round are unchanged |
+| Full suite | `Ran 147 tests` / `OK` |
+| Static/sensitive verification | compile, shell syntax, diff check and sensitive scan PASS |
+| External status | immutable remote install, transaction and strict health pending |
+
+Acceptance `AC-59…AC-62` covers public `/help@bot_username` and
+`/rules@bot_username`, group silence for ordinary text/media, blocking of
+sensitive group actions, and the admin dashboard before/after deadline. The
+candidate must preserve active `PILOT-20260826`, one worker and green strict
+delivery health through a normal v5 activation transaction.
+
 ## Infra-v6.3.7 S3 acceptance — LOCAL PASS / REMOTE PASS / BACKUP ACTIVE
 
 | Field | Value |

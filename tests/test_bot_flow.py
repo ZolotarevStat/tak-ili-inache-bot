@@ -104,6 +104,23 @@ class BotFlowTests(unittest.TestCase):
         self._callback("menu:new")
         self.assertIn("прошёл", self.tg.messages[-1][1])
 
+    def test_group_public_commands_accept_bot_suffix_and_ordinary_text_is_silent(self) -> None:
+        group = {"id": -9, "type": "group"}
+        user = {"id": 42, "first_name": "Т"}
+        self.bot.handle_update({"message": {"chat": group, "from": user, "text": "/help@tii_example_bot"}})
+        self.assertIn("❓ Помощь", self.tg.messages[-1][1])
+        self.bot.handle_update({"message": {"chat": group, "from": user, "text": "/rules@tii_example_bot"}})
+        self.assertIn("Ровно 5 ставок", self.tg.messages[-1][1])
+        message_count = len(self.tg.messages)
+        self.bot.handle_update({"message": {"chat": group, "from": user, "text": "обычное сообщение"}})
+        self.assertEqual(len(self.tg.messages), message_count)
+        self.bot.handle_update({"message": {"chat": group, "from": user, "sticker": {"file_id": "test-only"}}})
+        self.assertEqual(len(self.tg.messages), message_count)
+        self.bot.handle_update({"message": {"chat": group, "from": user, "text": "/predict@tii_example_bot"}})
+        self.assertEqual(len(self.tg.messages), message_count + 1)
+        self.assertIn("личном", self.tg.messages[-1][1])
+        self.assertIsNone(self.repo.get_participant("42"))
+
     def test_base_commands_route_while_a_user_draft_is_active(self) -> None:
         self._message("/start")
         self._callback("menu:new")
@@ -136,6 +153,34 @@ class BotFlowTests(unittest.TestCase):
         self.assertIn("round_id", tg.messages[-2][1])
         self._admin_callback(bot, tg, "admin:menu")
         self.assertEqual(_labels(tg.messages[-1][2]), ["Формат и пример CSV"])
+
+    def test_admin_menu_exposes_status_publish_results_and_scoring_by_stage(self) -> None:
+        repo, tg = FakeRepository(), FakeTelegram()
+        now = [self.round_.deadline_msk - timedelta(minutes=10)]
+        bot = BotService(repo, tg, lambda: now[0], admin_ids={"99"}, tournament_chat_id=-100)
+        repo.save_round(self.round_)
+
+        bot.handle_update({"message": {"chat": {"id": 9, "type": "private"}, "from": {"id": 99}, "text": "/admin"}})
+        labels = _labels(tg.messages[-1][2])
+        self.assertIn("Статус сдачи", labels)
+        self.assertNotIn("Опубликовать прогнозы", labels)
+
+        now[0] = self.round_.deadline_msk
+        bot.handle_update({"message": {"chat": {"id": 9, "type": "private"}, "from": {"id": 99}, "text": "/admin"}})
+        labels = _labels(tg.messages[-1][2])
+        self.assertIn("Статус сдачи", labels)
+        self.assertIn("Опубликовать прогнозы", labels)
+        self.assertIn("Внести результаты", labels)
+        self.assertNotIn("Скоринг", labels)
+
+        result = __import__("tak_ili_inache.models", fromlist=["BetResult", "Market"])
+        for fixture in self.round_.fixtures:
+            repo.save_result(result.BetResult(fixture.match_id, frozenset({result.Market.P1, result.Market.ONE_X, result.Market.TB})))
+        bot.handle_update({"message": {"chat": {"id": 9, "type": "private"}, "from": {"id": 99}, "text": "/admin"}})
+        labels = _labels(tg.messages[-1][2])
+        self.assertIn("Опубликовать прогнозы", labels)
+        self.assertIn("Скоринг", labels)
+        self.assertNotIn("Внести результаты", labels)
 
     def test_admin_synthetic_tour_import_publish_results_and_score(self) -> None:
         repo, tg = FakeRepository(), FakeTelegram()
