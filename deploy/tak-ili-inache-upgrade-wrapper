@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Root-only, explicit upgrade of the server-owned wrapper before activation.
+# Usage: sudo deploy/tak-ili-inache-upgrade-wrapper /opt/tak-ili-inache/releases/<id>
+[[ ${EUID:-1} -eq 0 && $# -eq 1 ]] || { echo "usage: root $0 <release-dir>" >&2; exit 64; }
+readonly RELEASE_DIR="$1"
+readonly SOURCE="$RELEASE_DIR/deploy"
+readonly TARGET=/usr/local/sbin/tak-ili-inache-admin
+readonly SUDOERS=/etc/sudoers.d/tak-ili-inache-admin
+readonly CAPABILITY="$(<"$SOURCE/tak-ili-inache-admin.capability")"
+[[ "$CAPABILITY" == "tak-ili-inache-admin:v5-delivery-recovery" ]] || { echo "unexpected wrapper capability" >&2; exit 1; }
+# Release archives preserve source files as ordinary 0644 files. Executability
+# is an installed-target property, set explicitly below; reject symlinks here.
+[[ -f "$SOURCE/tak-ili-inache-admin" && ! -L "$SOURCE/tak-ili-inache-admin" && -f "$SOURCE/tak-ili-inache-admin.sudoers" && ! -L "$SOURCE/tak-ili-inache-admin.sudoers" ]] || { echo "release wrapper files missing" >&2; exit 1; }
+readonly STAGE="$(mktemp -d /tmp/tak-ili-inache-wrapper.XXXXXX)"
+readonly STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+cleanup() { rm -rf "$STAGE"; }
+trap cleanup EXIT
+install -o root -g root -m 0750 "$SOURCE/tak-ili-inache-admin" "$STAGE/wrapper"
+install -o root -g root -m 0440 "$SOURCE/tak-ili-inache-admin.sudoers" "$STAGE/sudoers"
+visudo -cf "$STAGE/sudoers"
+[[ -f "$TARGET" && -f "$SUDOERS" ]] || { echo "installed wrapper/sudoers missing" >&2; exit 1; }
+cp -p "$TARGET" "$TARGET.backup.$STAMP"
+cp -p "$SUDOERS" "$SUDOERS.backup.$STAMP"
+if ! mv -f "$STAGE/wrapper" "$TARGET" || ! mv -f "$STAGE/sudoers" "$SUDOERS" || ! visudo -cf "$SUDOERS" || [[ "$("$TARGET" capability)" != "capability=$CAPABILITY" ]]; then
+  cp -p "$TARGET.backup.$STAMP" "$TARGET"
+  cp -p "$SUDOERS.backup.$STAMP" "$SUDOERS"
+  visudo -cf "$SUDOERS" >/dev/null
+  echo "wrapper upgrade rolled back" >&2
+  exit 1
+fi
+printf 'wrapper_capability=%s\n' "$CAPABILITY"

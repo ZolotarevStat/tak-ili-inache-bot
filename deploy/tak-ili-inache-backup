@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+: "${RESTIC_REPOSITORY:?RESTIC_REPOSITORY is required}"
+: "${RESTIC_PASSWORD_FILE:?RESTIC_PASSWORD_FILE is required}"
+: "${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is required}"
+: "${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is required}"
+: "${AWS_DEFAULT_REGION:?AWS_DEFAULT_REGION is required}"
+
+readonly DATA_DIR=/var/lib/tak-ili-inache
+readonly LOCK_FILE=/run/tak-ili-inache-backup.lock
+readonly KEEP_DAILY="${TAK_ILI_INACHE_BACKUP_KEEP_DAILY:-14}"
+readonly KEEP_WEEKLY="${TAK_ILI_INACHE_BACKUP_KEEP_WEEKLY:-8}"
+readonly KEEP_MONTHLY="${TAK_ILI_INACHE_BACKUP_KEEP_MONTHLY:-12}"
+
+if [[ ! -d "$DATA_DIR" ]]; then
+  echo "tak-ili-inache backup: runtime data directory is missing" >&2
+  exit 1
+fi
+
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo "tak-ili-inache backup: another backup is already running" >&2
+  exit 1
+fi
+
+restic cat config >/dev/null
+restic backup \
+  --tag tak-ili-inache \
+  --exclude .repository.lock \
+  --exclude '*.png' \
+  --one-file-system \
+  "$DATA_DIR"
+restic forget --prune \
+  --tag tak-ili-inache \
+  --keep-daily "$KEEP_DAILY" \
+  --keep-weekly "$KEEP_WEEKLY" \
+  --keep-monthly "$KEEP_MONTHLY"

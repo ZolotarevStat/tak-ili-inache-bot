@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly RELEASES_DIR=/opt/tak-ili-inache/releases
+readonly CURRENT_LINK=/opt/tak-ili-inache/current
+readonly KEEP_COUNT=3
+
+[[ -d "$RELEASES_DIR" ]] || exit 0
+[[ -L "$CURRENT_LINK" ]] || { echo "current release symlink is missing" >&2; exit 1; }
+
+current_target="$(readlink -f "$CURRENT_LINK")"
+case "$current_target" in
+  "$RELEASES_DIR"/*) ;;
+  *) echo "current release is outside releases directory" >&2; exit 1 ;;
+esac
+
+mapfile -t release_dirs < <(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -r)
+declare -A retained=( ["$(basename "$current_target")"]=1 )
+remaining=$((KEEP_COUNT - 1))
+
+for release in "${release_dirs[@]}"; do
+  [[ -n "${retained[$release]+x}" ]] && continue
+  if (( remaining > 0 )); then
+    retained["$release"]=1
+    remaining=$((remaining - 1))
+  fi
+done
+
+for release in "${release_dirs[@]}"; do
+  [[ -n "${retained[$release]+x}" ]] && continue
+  rm -rf -- "$RELEASES_DIR/$release"
+done

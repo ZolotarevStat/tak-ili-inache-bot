@@ -1,0 +1,76 @@
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+
+from .models import BetResult, Participant, Prediction, Round
+
+
+class Repository(ABC):
+    @abstractmethod
+    def save_round(self, round_: Round, actor_id: str = "", imported_at: str = "") -> None: ...
+
+    @abstractmethod
+    def replace_round(self, round_: Round, actor_id: str = "", imported_at: str = "") -> None: ...
+
+    @abstractmethod
+    def close_round(self, round_id: str, actor_id: str = "", closed_at: str = "") -> bool: ...
+
+    @abstractmethod
+    def round_status(self, round_id: str) -> str | None: ...
+
+    @abstractmethod
+    def mark_round_scored(self, round_id: str, scored_at: str = "") -> None: ...
+
+    @abstractmethod
+    def round_scored(self, round_id: str) -> bool: ...
+
+    @abstractmethod
+    def get_round(self, round_id: str) -> Round | None: ...
+
+    @abstractmethod
+    def save_prediction(self, prediction: Prediction, update_id: str = "") -> bool: ...
+
+    @abstractmethod
+    def get_prediction(self, round_id: str, participant_id: str) -> Prediction | None: ...
+
+    @abstractmethod
+    def raw_predictions(self) -> tuple[Prediction, ...]: ...
+
+    @abstractmethod
+    def register_participant(self, telegram_id: str, display_name: str) -> Participant: ...
+
+    @abstractmethod
+    def get_participant(self, telegram_id: str) -> Participant | None: ...
+
+    @abstractmethod
+    def get_active_round(self) -> Round | None: ...
+
+    @abstractmethod
+    def latest_predictions(self, round_id: str) -> tuple[Prediction, ...]: ...
+
+    @abstractmethod
+    def participants(self) -> tuple[Participant, ...]: ...
+
+    @abstractmethod
+    def save_result(self, result: BetResult, round_id: str | None = None) -> None: ...
+
+    @abstractmethod
+    def results(self, round_id: str) -> tuple[BetResult, ...]: ...
+
+    @abstractmethod
+    def raw_result_rows(self) -> list[dict[str, str]]: ...
+
+    @abstractmethod
+    def operation_done(self, operation_key: str) -> bool: ...
+
+    @abstractmethod
+    def mark_operation_done(self, operation_key: str) -> None: ...
+
+    @abstractmethod
+    def begin_operation(self, operation_key: str) -> str: ...
+
+    @abstractmethod
+    def pending_operations(self) -> tuple[str, ...]: ...
+
+    @abstractmethod
+    def resolve_operation(self, operation_key: str, delivered: bool) -> None: ...

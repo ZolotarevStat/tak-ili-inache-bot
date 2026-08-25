@@ -1,0 +1,50 @@
+.DS_Store
+
+# Secrets and machine-local configuration.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*credentials*.json
+*service-account*.json
+
+# Runtime and private game data.
+data/runtime/
+runtime/
+output/
+outputs/
+backups/
+logs/
+drafts_runtime.json
+*.log
+*.tar
+*.tar.gz
+*.tgz
+*.png
+
+# Only deterministic synthetic fixtures belong in Git.
+data/*.csv
+!data/fixtures_sample.csv
+!data/fixtures_smoke_20260907.csv
+
+# Local planning, audits and provider evidence.
+task_context.md
+research_plan.md
+*_audit.md
+prompts/
+GITHUB_PUBLISH_PLAN.md
+SPRINTBOX_INFRA_RESEARCH.md
+
+# Python/editor build products.
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]

@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily freshness verification of Tak ili inache backup
+
+[Timer]
+OnCalendar=*-*-* 10:00:00 Europe/Moscow
+Persistent=true
+Unit=tak-ili-inache-backup-freshness.service
+
+[Install]
+WantedBy=timers.target

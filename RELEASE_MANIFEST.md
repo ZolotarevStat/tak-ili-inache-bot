@@ -1,0 +1,626 @@
+# Release manifest — «Так или иначе»
+
+## Identity
+
+| Поле | Значение |
+|---|---|
+| Package | `tak-ili-inache-bot` |
+| Version | `0.1.0` |
+| Release status | `FULL LOCAL PASS / REMOTE PENDING / PRODUCTION NO-GO` |
+| Open gate | immutable staging → atomic transaction → CJM v1.2 Telegram re-smoke |
+| Repository HEAD | `N/A — untracked project subtree; commit SHA is not asserted` |
+| Short SHA | `N/A` |
+| Release ID | `0.1.0-cjm-v1-2-close-integrity-20260825-local` |
+| Local verification at | `2026-08-25, CJM v1.2 partial-edit + close-integrity P1 local pass` |
+| Python | `3.12.7` local; `3.13` not available locally |
+| Runtime digest | `sha256:c68e07363c469eefa32f6f58d2ee3bfd8e00ecbad1d155294bd05bdf0bee5fa4` |
+
+## Historical Sprintbox deployment gate — predates current local candidate
+
+The permitted `admin` SSH path and v4 restricted wrapper were reachable, but
+the wrapper's strict `health` returned exit `1`: `active_round=SMOKE-20260907`,
+`data_ok=true`, `liveness.ok=true`, `delivery_ok=false`, and
+`reply_error_count=2`. The active worker remained on
+`0.1.0-sequential-round-p0-20260824-local`. No remote release upload/install,
+backup mutation, symlink/service change, activation, or Telegram console action
+was performed; durable data and the active draft were untouched by this gate.
+Production remains NO-GO.
+
+This paragraph records the pre-recovery gate. The predecessor
+`0.1.0-delivery-health-wrapper-v5-20260907-local` was subsequently activated as
+Sprintbox `current` with its recorded digest and strict health green. That
+historical remote PASS does **not** verify, stage or activate the current
+`0.1.0-cjm-v1-2-close-integrity-20260825-local` candidate.
+
+Runtime digest рассчитан `scripts/release_digest.py` только по исполняемому
+release surface: `pyproject.toml`, `Dockerfile`, `src/tak_ili_inache/` и `deploy/`.
+Planning-документы, audits, tests, runtime data, venv и build products не могут
+изменить этот digest. Он воспроизводимо рассчитан дважды с идентичным результатом.
+
+## Verification results
+
+| Проверка | Результат | Evidence |
+|---|---:|---|
+| Unit/integration suite | PASS (local) | `Ran 117 tests` / `OK` |
+| Clean Python 3.12 venv install | PASS | fresh isolated PEP 517 venv: downloaded build dependency `setuptools>=68`, `pip install .` built/installed package, then `import tak_ili_inache` resolved from venv site-packages |
+| Python 3.13 | NOT AVAILABLE LOCALLY | `python3.13` отсутствует; не заявляется как проверенный этим локальным циклом |
+| Python compile | PASS | `src`, `tests`, `scripts`, exit 0 |
+| Transport/polling P0 | PASS | IPv6 0.6 s connect/TLS phase timeout; bounded pre-send retry/re-resolution; no post-send replay; `getUpdates(30)` resets connected TLS socket to request-scoped 40 s before HTTP write; exponential poll failure backoff |
+| CJM v1.2 partial edit | PASS (local) | E2 selected-match removal, W1 atomic reconciliation, typed correction clone/R1, stable selection/bet identities, R0 blank full replacement, stale/double/restart and v1/v2 snapshot compatibility |
+| Draft edit delivery ambiguity | PASS (local) | applied edit + lost response propagates `UnknownDeliveryError`; no `sendMessage` fallback/second card; durable revision, stale replay and restart keep one-card semantics; only deterministic edit rejection may fall back |
+| Sequential-round lifecycle P0 + close integrity P1 | PASS (local) | active `SMOKE-*` two-step close is allowed before/after deadline and regardless of scoring/results/publish; exact nonempty one-shot token binds requesting admin+round+checksum, pending outbox blocks; durable close intent recovers either rounds/audit crash boundary to `closed` + exactly one `round_closed` audit; regular policy/no auto-switch/history/result scope remain fail-closed |
+| Liveness health / observability | PASS | `delivery_ok` requires healthy liveness and an outbound delivery at/after the last reply error; cumulative diagnostic count is retained, legacy count-only snapshots fail closed, and CLI/wrapper still exit non-zero for `ok:false` |
+| PNG reporting | PASS | три PNG имеют сигнатуру, ненулевые размеры и открываются Pillow; exact series сверены с `scoring.csv`/`leaderboard.csv`; Telegram flow использует `sendPhoto` с русскими captions, типы ставок подписаны «Ординары»/«Экспрессы» |
+| Tokenless transport gate | PASS (local fault model) | 200 logical IPv6 calls recover 7–10% first-attempt timeouts; repeated outage fails closed/non-zero; logical p95/p99 contract is documented |
+| Smoke acceptance docs | PASS (local) | `LOCAL_SMOKE.md` синхронизирован с candidate ID, `Ran 117 tests`, runtime digest and explicit remote-pending gate |
+| Deployment helper | PASS | `getUpdates` читает только sender/chat IDs до старта worker; token берётся только из env и не попадает в output/errors |
+| Restricted wrapper compatibility | PASS | v5 keeps v4 current-derived canonical root-owned path/digest/tamper validation and disabled generic `activate`; it adds only `activate-delivery-recovery` for the exact legacy-red baseline, candidate liveness marker, 120 s reply-delivery gate and honest red rollback |
+| Shell syntax | PASS | `bash -n` for admin, wrapper-upgrade, backup and prune scripts, exit 0 |
+| Sensitive scan | PASS | 0 token/private-key/hardcoded Telegram ID matches under scan rules |
+| Historical Sprintbox staged verification | PASS (older candidate only) | immutable sequential tree; Python 3.13.5 clean install; `Ran 87 tests` / `OK`; compile, shell, sensitive scan and `systemd-analyze verify` passed; does not verify the current local candidate |
+| Historical tokenless transport gate | PASS (older candidate only) | sequential canonical run: 200/200, IPv6 only, p95 794 ms, p99 805 ms, exit 0; 25 recovered pre-send failures, zero final failures |
+| Historical active sequential release | PASS (older candidate only) | v4 transaction activated candidate; one worker, strict health and IPv6 long-polls passed; not evidence for this local candidate |
+| Current candidate staging / remote verification | PENDING | not performed for this local v1.2 candidate |
+| Current candidate activation | PENDING | not performed; active runtime and data were not touched |
+| External CJM v1.2 re-smoke | PENDING | active round: R0/R1, partial E2 removal/W1 reconciliation, stale/restart and confirm → `/my`; no production GO |
+
+Tests emitted one non-blocking Python 3.14 `tarfile.extractall` deprecation warning. The verified runtime is Python 3.12.7 and archive paths are validated before extraction.
+
+## CJM v1.2 local candidate — 2026-08-25
+
+`0.1.0-cjm-v1-2-close-integrity-20260825-local` is **undeployed**. Its runtime-only
+digest was calculated twice as
+`sha256:c68e07363c469eefa32f6f58d2ee3bfd8e00ecbad1d155294bd05bdf0bee5fa4`.
+Python 3.12.7 completed **117/117** tests; compile, shell syntax and the secret
+scan and exact-current clean Python 3.12 PEP 517 install/import passed. Python
+3.13, immutable remote staging, transactional activation and Telegram re-smoke
+were not run for this candidate.
+
+The delta is bounded to participant CJM: one correction draft cloned from the
+confirmed coupon; internal stable selection/bet identities; compatible
+same-match market replacement; E2 one-match removal with W1 reconciliation;
+and distinct R0 blank full replacement. It additionally permits a two-step,
+token-bound close of any active `SMOKE-*` round before/after deadline without
+scoring, while preserving audit/history and the regular-round policy. The P1
+delta makes the token mandatory and adds a minimal durable close-intent recovery
+for the `rounds.csv`/`audit_log.csv` commit boundary. It does not change
+transport, scoring, reporting, deploy scripts or runtime data. Production
+remains NO-GO.
+
+## Historical active candidate evidence — 2026-09-07
+
+`0.1.0-cjm-v1.1-smoke-fixes-v2-20260907-local` was a historical active Sprintbox
+release. Its deterministic runtime digest ×2 was
+`sha256:dca5101a1cde72e97f3bd18549d1c675c126c6dd60e208da3f137e26e8119521`;
+the Python 3.12.7 suite passed **105/105**. It contains the pagination-boundary,
+forced exact-amount and manual-range fixes plus the one-card delivery rule:
+`UnknownDeliveryError` after an edit never triggers `sendMessage`, while a
+proved pre-send failure or non-retryable Telegram reply rejection may use the
+existing recovery card. Compile, shell syntax, sensitive scan and scope diff
+passed locally and during immutable remote staging. Green-baseline transactional
+activation passed without rollback; the worker is healthy and the active smoke
+round was preserved. No Telegram command or runtime-data mutation was made by
+staging/activation.
+Repository HEAD remains `N/A` because this is an untracked project subtree.
+
+### Historical local wrapper-v5 evidence before its later activation
+
+The delivery-health base `0.1.0-delivery-health-20260907-local` remains
+undeployed with recorded digest
+`sha256:5f7238abe0cb2e3865d228b0b313ac6ef06ded27e39c7d41e34c8f6e815d3369`.
+It is superseded locally by
+`0.1.0-delivery-health-wrapper-v5-20260907-local`. Repository HEAD remains
+`N/A` because this is an untracked project subtree.
+
+### Wrapper v5 delivery-recovery package — full local pass
+
+`0.1.0-delivery-health-wrapper-v5-20260907-local` has deterministic runtime
+digest ×2 `sha256:fc9303f8f9f2abe2ad019bcb663e32aaa0f04e51621edab485534d24b26e0b29`.
+The Python 3.12.7 suite passed **99/99**. `bash -n` passed for every release
+wrapper, `compileall` passed for `src`, `tests` and `scripts`, and the
+runtime-surface sensitive scan found 0 matches. No SSH, staging, deploy,
+activation, root-console command or Telegram API call was made.
+
+V5 retains all v4 current-derived release-root/path/digest/capability and
+post-failure tamper checks, and keeps generic `activate` disabled. The added
+`activate-delivery-recovery <candidate-id>` first accepts only data+liveness
+green plus legacy delivery-red (`reply_error_count>0`, absent
+`last_reply_error_at`). It switches/restarts transactionally, waits for liveness
+before exact `candidate_delivery_ready`, then grants at most 120 seconds for
+strict delivery health. Only a successful outbound reply can pass. Timeout or
+candidate reply error restores the exact prior identity and returns non-zero
+with `delivery baseline remains red`; tampered path/digest is `CRITICAL:` and
+never triggers an unverified restore. An exclusive lock makes a parallel switch
+fail closed; a second completed invocation does not restart another worker.
+
+This candidate adds only delivery-health semantics over the prior CJM v1.1
+surface: `liveness.py`, `operations.py`, and direct health regressions. The
+cumulative `reply_error_count` is retained; `last_reply_error_at` is persisted
+separately; `delivery_ok` is true only for healthy liveness with no reply error
+or an outbound delivery at/after the last reply error. Poll/update success does
+not clear the gate, and restart/load preserves the evidence. A legacy snapshot
+with a non-zero count but no error timestamp fails closed until a newly observed
+outbound delivery establishes recovery. Transport, polling, delivery,
+repository, scoring, reporting, deploy, telemetry, secrets and privacy surfaces
+are unchanged. v1.1 keeps the five-bet domain contract and adds no market or
+scoring rule. Its re-smoke must prove:
+11–14 fixtures render in the mandated 2-page E1 grid; E2 has all seven events;
+X1 has all chosen events; B2 preserves active stakes until Apply; W1 refuses a
+silent incompatible reset; stale/double callbacks and a restart cannot mutate
+or duplicate the active card. The currently active server release remains the
+sequential-round candidate until transactional promotion succeeds.
+
+This candidate supersedes the active `0.1.0-cjm-v1-wrapper-v4-20260824-local`
+only after the bounded v5 delivery-recovery transaction. It adds no scoring or transport change.
+The active round is never implicitly replaced: a different `round_id` upload is
+rejected until the operator reaches terminal `closed`. Same-round line replace
+remains fail-closed after any prediction, result or pending outbox operation.
+For a post-deadline `SMOKE-*` round, including one already published with partial
+results, admin performs a two-step `Закрыть тестовый тур без расчёта`; it only
+archives metadata and preserves fixtures, raw/latest predictions, scoped results
+and audit. Non-SMOKE close remains blocked until successful scoring. `rounds.csv`
+stores `status`/timestamps, fixtures are retained per round, and legacy
+single-round result rows are atomically migrated to the unique active round.
+
+The active v3 release remains the transport rollback reference. The v4 upgrade
+removes the historical fixed legacy anchor: it derives and verifies actual
+`current` before every promotion, and only that exact path/digest can be
+restored. The first v4 wrapper upgrade is an external gate; this document does
+not claim a production GO.
+
+The candidate applies a 0.6 s IPv6 connect/TLS attempt timeout plus at most
+three DNS re-resolved pre-send attempts. Recovered attempt timeout is reported
+separately; only final logical delivery is subject to zero failures, p95 ≤2 s
+and p99 ≤5 s. Repeated outage fails closed. After pre-send succeeds,
+`TelegramApi` replaces the connector's short socket timeout with the exact API
+request budget before HTTP write: `getUpdates(timeout=30)` receives 40 s;
+ordinary requests retain their bounded 20 s default. Scoped INFO telemetry is
+emitted to worker stderr without token, IDs, payload or text. The health CLI
+and restricted wrapper return non-zero for safe JSON `ok:false`; Async polling
+has bounded exponential failure backoff. The root-only wrapper upgrade script
+accepts regular non-symlink source files even when packaging preserves the
+wrapper as `0644`, then explicitly installs the staged target as `0750`.
+It validates the staged sudoers file, keeps timestamped backups and verifies
+the installed capability before the release wrapper may activate. The
+privileged-free tokenless command `tak-ili-inache-transport-canary --calls 200`
+is mandatory before Telegram UX testing. This candidate supersedes the 5cf0
+candidate, whose first wrapper-upgrade attempt stopped safely before any server
+change because it incorrectly required source executable mode; all prior canary
+failures and rollback remain historical evidence.
+
+## V3 legacy rollback transaction — local P0 remediation (2026-08-24)
+
+### Threat and failure analysis
+
+The v2 generic `activate <release-id>` capability check is fail-closed for an
+unknown target, but it also rejects the active legacy release because that
+release predates capability files. A candidate activation followed by failed
+strict health would therefore leave the restricted administrator without an
+authorized rollback. A direct symlink workaround would bypass release identity,
+digest verification and the data-preservation contract.
+
+Path A is not safe locally: no archived copy of the complete legacy release
+tree is available in this worktree, and adding a capability file changes the
+runtime release surface. A claimed byte-equivalent compatible artifact could
+not be proven. The implementation therefore chooses the narrower path B.
+
+### Implemented v3 boundary
+
+`tak-ili-inache-admin:v3-transactional-legacy-rollback` disables generic
+activation. It accepts exactly one legacy rollback identity
+`0.1.0-p0-stabilization-20260824-131700` and recomputes that target's
+runtime-only digest as the unprivileged worker before any switch; it must equal
+`sha256:86bad6ba9409bd5f914677932c8814b44edcfb5b016509a18934430b2f47522b`.
+The v3 release carries a two-line immutable anchor containing only that ID and
+digest — no env, runtime data, venv, build products or secrets. Root upgrade
+installs wrapper, sudoers and anchor together with staged validation, backups
+and rollback.
+
+The sole code-switch command is:
+`activate-transaction <candidate-id> <legacy-id>`. Before changing `current`,
+it validates candidate capability, anchor contents, legacy runtime digest and
+that `current` is the verified legacy target. It then switches candidate,
+restarts the service and waits for strict liveness plus zero recorded delivery
+errors. Any restart/health failure atomically switches the anchored legacy
+target back, restarts it and requires strict liveness health; it returns
+non-zero even after successful recovery. Generic `activate` is explicitly
+disabled.
+
+Local regressions cover delivery-health fail-closed, candidate/anchor ordering,
+candidate restart/health fault path, legacy digest mismatch rejection, and
+packaged `0644` wrapper source → installed `0750` target. No deployment,
+activation, SSH or Telegram API call was performed for v3.
+
+## Sprintbox staged evidence — wrapper packaging fix (2026-08-24)
+
+The candidate was copied as an immutable incoming tree with only
+`data/fixtures_sample.csv` retained from `data/`; `.git`, `.env`, venv, build,
+output, logs and runtime data were excluded. On Sprintbox / Python 3.13.5 the
+restricted wrapper completed clean `pip install .` and **72/72** tests. A
+separate compile, `bash -n`, `systemd-analyze verify`, sensitive scan (0 match
+files) and exact digest check passed. The staged wrapper and sudoers are regular
+non-symlink `0644` source files, and the new upgrade script explicitly installs
+the live wrapper target as `0750`.
+
+The new candidate's runtime source and `pyproject.toml` package contract are
+byte-identical to the already canonical tokenless IPv6 canary-PASS candidate.
+Therefore its tokenless gate is recorded by equivalence without rerun:
+`200/200`, zero final failures, IPv6 only, 21 recoveries, p50/p95/p99
+`139/793/805 ms`, max `1507 ms`, exit `0`. This is limited to transport/package
+equivalence; it is not activation or Telegram UX evidence.
+
+No activation, wrapper/sudoers update, service restart or runtime-data change
+has been made. `current` remains
+`0.1.0-p0-stabilization-20260824-131700`; service is active/enabled with one
+worker and `NRestarts=0`. The only pending privileged action is the verified
+rollback-path remediation; production remains NO-GO.
+
+### Activation preflight block after wrapper upgrade
+
+The root upgrade itself completed successfully: both staged and installed
+sudoers passed `visudo`, and the installed wrapper reports
+`capability=tak-ili-inache-admin:v2-strict-health`. Before activation, however,
+the active rollback release `0.1.0-p0-stabilization-20260824-131700` was found
+to have no `deploy/tak-ili-inache-admin.capability` file. The v2 wrapper rejects
+any activation target without that exact file, including the rollback target.
+Consequently, activating the candidate would create a state that the restricted
+admin account cannot automatically roll back after a strict-health failure.
+Activation was deliberately not attempted; no worker, service, `current`, env,
+runtime data or draft snapshot changed. A new release/wrapper contract must
+provide a narrowly authorized rollback to the legacy target (or a verified
+compatible rollback artifact) before activation can proceed.
+
+## Historical external gate — tokenless PASS, post-activation FAIL (2026-08-24)
+
+The immutable release included only `data/fixtures_sample.csv` from `data/` and
+excluded `.git`, `.env`, venv, build, output, logs and all runtime data. On
+Sprintbox / Python 3.13.5, clean `pip install .`, **67/67** tests, compile,
+`systemd-analyze verify` and exact remote digest equality all passed.
+
+The mandatory tokenless `tak-ili-inache-transport-canary --calls 200` passed
+twice before activation:
+
+| Run | Logical result | Recovered pre-send attempts | Family | Latency |
+|---|---|---:|---|---|
+| 1 | 200/200 success, 0 final failures | 21 | ipv6 only | p50 139 ms, p95 791 ms, p99 801 ms, max 1117 ms |
+| 2 | 200/200 success, 0 final failures | 20 | ipv6 only | p50 138 ms, p95 791 ms, p99 800 ms, max 1500 ms |
+
+The earlier desktop transcript snapshot looked empty although the complete
+command stdout contained both JSON reports and exit 0. That was a display
+interpretation error only, **not** a transport defect or a third canary result.
+
+The release was then atomically activated. It had one active/enabled worker,
+`NRestarts=0` and RSS ~15 MiB, but did **not** produce a fresh successful poll:
+the worker logged five anonymized `polling_fail kind=get_updates` events from
+20:45 to 20:46 MSK, and liveness had no successful-poll timestamp. Therefore
+the required post-activation strict-health and actual-family evidence did not
+pass, and the service was immediately rolled back to
+`0.1.0-p0-stabilization-20260824-131700`. Runtime CSV and draft snapshots were
+not changed or deleted. The rollback is active/enabled with one worker and
+`NRestarts=0`.
+
+Bounded code-and-journal classification confirms an **application long-poll
+timeout mismatch**, not a new Sprintbox network failure. `FamilyConnector`
+sets the TLS-wrapped socket timeout to its 20 s default. `getUpdates` requests
+Telegram long polling for 30 s (and passes a 40 s request timeout), but the
+already connected socket is not reset to that per-request timeout before it is
+assigned to `HTTPSConnection`. The five existing failures are spaced 21–24 s
+apart, exactly matching a 20 s read cutoff plus polling backoff. Detailed
+`telegram_transport` INFO records are not journal-visible, so no extra probe
+was run; their absence does not weaken the code-level causal finding.
+
+Two deployment P0 defects block another external run:
+
+1. The root-owned server wrapper was not updated by the immutable release
+   install (server wrapper mtime 02:48 MSK vs candidate wrapper 10:26 MSK).
+   Its safe `health` invocation returned exit 0 and outer `ok:true` while the
+   nested liveness report was `ok:false`. Thus it does not provide the strict
+   health contract that the candidate CLI itself has.
+2. The candidate worker emitted only `polling_fail` at journal-visible level;
+   per-request `telegram_transport ... family=...` telemetry was unavailable
+   there. Actual runtime family therefore cannot be asserted without reading
+   protected env, which is prohibited.
+
+No 30-minute soak, Telegram command/callback canary, CJM or full functional
+smoke was run. The Sprintbox network ticket remains prepared but unsent.
+
+### Required implementation/deployment handoff
+
+1. Add a narrowly validated root-owned deployment path which upgrades the
+   restricted wrapper from the verified release as part of activation (or a
+   dedicated fixed bootstrap command). It must not grant arbitrary root file
+   writes and must be regression-tested against the actual installed wrapper.
+2. Add a safe wrapper status check that exposes only the resolved validated
+   address family (`ipv6`/`ipv4`/`auto`), never token, IDs or env values.
+3. Make aggregate runtime transport telemetry observable at warning/metric
+   level: family, logical failures, recovered pre-send attempts, safe phase and
+   latency buckets. Do not log payloads or text.
+4. Reset the connected socket to the per-request timeout immediately before
+   HTTP I/O (`sock.settimeout(timeout)`) or use an equivalent request-scoped
+   mechanism. Add a regression proving a 30 s Telegram long poll is not cut
+   off by the connector's 20 s default.
+5. Add an automated external regression where a real worker produces a fresh
+   `getUpdates` heartbeat through the same runtime config; health must return
+   non-zero whenever that heartbeat is stale.
+
+Only after these local and remote checks pass may the tokenless gate be run
+again. Do not use real Telegram-user actions to work around this infrastructure
+failure.
+
+## Historical Sprintbox evidence — failed rollback target
+
+This section describes only the previously deployed failed release
+`0.1.0-p0-stabilization-20260824-131700`
+(`sha256:86bad6ba9409bd5f914677932c8814b44edcfb5b016509a18934430b2f47522b`).
+It is not the current candidate identity and may be used only as a rollback
+target during the candidate canary.
+
+- **2026-08-24 13:17 MSK:** атомарно активирован и перезапущен
+  `0.1.0-p0-stabilization-20260824-131700`; прежние `…090000` и `…080000`
+  оставлены как rollback candidates.
+- **2026-08-24 13:18 MSK:** service `enabled` и `active`, один worker,
+  strict liveness health подтвердил свежий successful poll.
+- **2026-08-24 13:20 MSK:** `check-env` подтвердил непустой token и права
+  `0640 root`; `check-webhook` подтвердил отключённый webhook. Значения env,
+  Telegram IDs и payload не читались. Liveness зарегистрировал один временный
+  failure `getUpdates` и последующее восстановление.
+- **Canary:** `FAIL` — реальные пользовательские updates выявили минутные
+  задержки и transport/UI failures; production GO по-прежнему запрещён.
+
+## Post-deploy canary finding
+
+На **2026-08-24 19:10–19:21 MSK** ресурсный срез исключил нехватку VDS: `NRestarts=0`,
+RSS worker ~16 MiB, available RAM ~419 MiB, swap ~1.8 MiB, pressure/IO wait 0.
+Однако liveness накопил 64 `getUpdates` errors, successful poll стал stale, а
+журнал зафиксировал серию failures `send_message`, `answer_callback` и
+`clear_keyboard` во время пользовательских команд.
+Следовательно, silent reply loss вызывается не ресурсами, а некорректной policy:
+обычный `sendMessage` был переведён в best-effort и может быть отброшен без
+повтора. Требуется новый P0 fix и test release; этот release нельзя считать
+прошедшим canary.
+
+Сетевой A/B с того же VDS без token: Telegram IPv4 — 5/5 TCP timeout по 3
+секунды; Telegram IPv6 — 3/3 успеха за ~0.10 секунды; контрольные IPv4 hosts —
+успех за ~0.09–0.10 секунды. Подтверждён дефект маршрута именно к Telegram IPv4,
+который синхронный single-thread transport усиливает до минутной блокировки.
+
+## Undeployed backup-policy delta
+
+После создания private Sprintbox S3 bucket владелец исключил производные PNG из
+backup scope. Локально `create_backup()` и restic исключают `*.png`, сохраняя
+CSV как источник повторной генерации; regression и полный suite `42/42` PASS,
+shell syntax PASS. Новый локальный runtime digest:
+`sha256:db1b71811bc4edb9b63bc3f9f702ee90b3a7babd8a6fd4e7642e4a07d7d3a0f1`.
+Изменение **не развёрнуто** и не меняет NO-GO: следующий release обязан также
+содержать отдельный P0 fix надёжной доставки обычных `sendMessage`.
+
+## Current runtime release surface
+
+- `pyproject.toml`, `Dockerfile`
+- `src/tak_ili_inache/`
+- `deploy/`
+
+Planning docs, tests, audits, runtime data and build products are deliberately
+excluded from the current runtime digest. Historical superseded audits remain
+outside the candidate identity.
+
+## Blocked-release remediation
+
+Перед любым следующим внешним smoke необходимы:
+
+1. command-first canary с начала: `/start`, `/help`, `/admin`, `/my`, затем те
+   же команды из активного draft и recovery после одной ошибочной update;
+2. после PASS canary — повторный smoke: полный купон →
+   publish/results/scoring/PNG/outbox/restart/reboot/backup-restore;
+3. проверить `tak-ili-inache-admin health` после запуска worker: он обязан
+   показывать свежий liveness heartbeat;
+4. зафиксировать только несекретные evidence и решить GO/NO-GO отдельным audit.
+
+## Release rule
+
+Этот manifest фиксирует локальный PASS, который оказался недостаточным. До PASS
+нового полного внешнего Telegram smoke версия не является release candidate,
+готовым к production, и production GO запрещён.
+
+## Historical local transport P0 candidate — superseded
+
+**Historical status: FULL LOCAL TRANSPORT P0 PASS / EXTERNAL CANARY FAIL.** Runtime-only digest:
+`sha256:57d3cb8dc3f928b96cdf017cda6409b6a413cd25b18cefe8feff27e1194c941d`
+(two identical local calculations). The digest covers only `pyproject.toml`,
+`Dockerfile`, `src/tak_ili_inache/` and `deploy/`; planning documents, audits,
+tests and runtime data cannot change it.
+
+Local evidence: full suite `Ran 60 tests` / `OK`; clean Python 3.12 venv
+install/import; compile; shell syntax; sensitive scan. Added acceptance covers
+IPv6 runtime default/override validation, no IPv4 resolution request in ipv6
+mode, 100 stale callback replays, restart/resume, duplicate/stale revision,
+deadline expiry, edit failure fallback, snapshot privacy and crash between
+revision calculation and final snapshot persistence.
+
+Canary environment must explicitly retain
+`TAK_ILI_INACHE_TELEGRAM_ADDRESS_FAMILY=ipv6`. The release resolves DNS and
+uses hostname/SNI without hardcoded Telegram IP. `auto` is an allowed but
+non-default override only after a documented IPv4 route revalidation.
+
+Remaining gates are external only: atomic test deploy, command-first IPv6
+canary with strict liveness, then the complete Telegram smoke. No production
+GO or production-group use is authorized by this manifest.
+
+## External transport canary — FAIL and automatic rollback (2026-08-24)
+
+The candidate was copied to an immutable incoming tree. The first staging tree
+excluded `data/fixtures_sample.csv` too broadly and its remote suite failed
+before activation; it was retained for audit and never became `current`. A
+second tree, `0.1.0-transport-p0-candidate-20260824-local-r1`, contained only
+that source test fixture in addition to the candidate tree. It had no runtime
+data, `.env`, venv, build, output or logs.
+
+- On Sprintbox / Python 3.13.5: clean `pip install .`, `Ran 60 tests` / `OK`,
+  compile and `systemd-analyze verify` all passed. Remote digest exactly
+  matched `sha256:57d3cb8dc3f928b96cdf017cda6409b6a413cd25b18cefe8feff27e1194c941d`.
+- The r1 release was atomically activated and ran as exactly one worker. Two
+  valid connector runs then failed the transport gate: **181/200 success + 19
+  `TimeoutError`, p95 3019 ms**; **186/200 success + 14 `TimeoutError`, p95
+  3017 ms**. This violates the zero-connect-timeout requirement and p95 ≤2 s
+  SLO; it is a fail even though successful calls used IPv6/SNI.
+- Bounded independent triage: DNS was successful in 3.7 ms and returned one
+  AAAA endpoint, `2001:67c:4e8:f004::9`. Of 20 direct IPv6 TLS probes, 17
+  reached HTTP and 3 failed specifically at TCP **connect** with
+  `TimeoutError` at ~3.0 s. No DNS, TLS or read failure was observed. Thus the
+  residual issue is intermittent IPv6 TCP reachability to Telegram, not CPU,
+  RAM, disk or application logic.
+- Automatic rollback restored
+  `0.1.0-p0-stabilization-20260824-131700` without changing
+  `/var/lib/tak-ili-inache` or draft snapshots. Post-rollback: active/enabled,
+  one polling worker, `NRestarts=0`, RSS-memory accounting ~14 MiB. The legacy
+  runtime still reports polling errors because its Telegram IPv4 path is bad.
+
+An additional P0 deploy/health defect was observed: the restricted `health`
+wrapper returns shell exit 0 even when its safe JSON reports `"ok": false`.
+It therefore cannot be used as a strict automation gate until the health CLI
+returns non-zero for an unhealthy liveness state. No user Telegram action or
+full functional/CJM smoke is authorized after this transport failure.
+
+### Unsent Sprintbox support-ticket draft
+
+> Subject: Intermittent IPv6 TCP connectivity from Sprintbox VDS to
+> api.telegram.org:443; IPv4 route also times out
+>
+> From the VDS in Saint Petersburg on 2026-08-24, DNS for `api.telegram.org`
+> returned `2001:67c:4e8:f004::9`. A bounded test produced 3 TCP-connect
+> timeouts of 20 attempts (each ~3.0 s); successful IPv6 TLS requests complete
+> in ~0.10–0.13 s. Two 200-connection application connector runs had 19 and 14
+> `TimeoutError` respectively. Earlier IPv4 TCP tests to the same host timed
+> out 5/5 while unrelated IPv4 hosts succeeded. Please check routing, filtering
+> and packet loss for both IPv4 and IPv6 paths to `api.telegram.org:443` from
+> this VDS. No bot token, account data or request payload is attached.
+
+This text is prepared only; it has not been sent.
+
+## Sprintbox v3 staged-preflight — PASS (2026-08-24)
+
+`0.1.0-v3-legacy-rollback-20260824-local` was copied as an immutable tree;
+only `data/fixtures_sample.csv` was retained from `data/`, and `.git`, `.env`,
+venv, build, output, logs and runtime data were excluded. On Sprintbox / Python
+3.13.5, clean `pip install .` produced **75/75** / `OK`; compile, shell syntax,
+`systemd-analyze verify` and sensitive scan (0 matched files) passed. Candidate
+digest exactly matched
+`sha256:af4dddfbc3b7b454d2c8cda516236de7b1799260c0a4807628d78d4020e05cac`.
+
+The staged wrapper, sudoers and anchor are regular non-symlink `0644` files.
+Anchor ID is `0.1.0-p0-stabilization-20260824-131700`; its full runtime digest
+is `sha256:86bad6ba9409bd5f914677932c8814b44edcfb5b016509a18934430b2f47522b`.
+The same release-digest script independently recomputed legacy digest before
+root action and matched the anchor.
+
+One direct staged tokenless canary was safely captured as aggregate-only output:
+200/200 logical successes, zero final failures, IPv6 only, 27 recoveries,
+p50/p95/p99 `141/792/805 ms`, max `819 ms`, exit `0`. Current remains legacy
+`…131700`; service is active/enabled with one worker and `NRestarts=0`. No v3
+root upgrade or activation has been performed.
+
+## Sprintbox v3 transaction — transport P0 PASS, UX gate pending (2026-08-24)
+
+The root-installed wrapper reports
+`capability=tak-ili-inache-admin:v3-transactional-legacy-rollback`; its
+root-owned anchor is mode `0444`, matches the staged anchor byte-for-byte, and
+contains the exact legacy ID/digest above. One and only one
+`activate-transaction 0.1.0-v3-legacy-rollback-20260824-local
+0.1.0-p0-stabilization-20260824-131700` returned exit `0` with
+`activation transaction passed`.
+
+After activation, `current` resolves to the v3 candidate; service is
+active/enabled with exactly one worker, `NRestarts=0` and RSS 34,592 KiB.
+Strict liveness plus delivery-aware health returned `ok:true`: fresh successful
+poll age 23 s, zero handler/polling/reply errors since the new worker start.
+Webhook is disabled (the wrapper checked only token presence/mode, never a
+value). Safe journal evidence shows three consecutive `getUpdates` deliveries
+over IPv6, each about 30.1 s, with no retry, transport or delivery error.
+
+This proves the server-side transport P0 gate. It does not prove Telegram UX:
+command-first canary requires owner-originated private-chat updates and remains
+the next gate. A 24-hour soak window starts at activation, 2026-08-24 21:47:06
+MSK; success requires active/enabled service, one worker, `NRestarts=0`, fresh
+strict liveness/delivery health, IPv6 successful polls and no new reply errors.
+Its earliest conclusion is 2026-08-25 21:47:06 MSK. Production remains NO-GO.
+
+## Sprintbox v4 staged-preflight — PASS (2026-08-24)
+
+`0.1.0-cjm-v1-wrapper-v4-20260824-local` was staged as an immutable tree with
+only `data/fixtures_sample.csv`; VCS, env, venv, build, output, logs and runtime
+data were excluded. Clean Python 3.13.5 installation passed **81/81** / `OK`.
+Compile, shell syntax, `systemd-analyze verify` and sensitive scan (0 matched
+files) passed. Remote candidate digest exactly matched
+`sha256:77805d640af7e081662d5852977a18dba938b6c3d9fc0cb4cc23b871641ad921`.
+
+The v4 wrapper/sudoers sources are regular non-symlink `0644` files. Capability
+is `tak-ili-inache-admin:v4-current-derived-rollback`; no legacy hardcoding was
+found, and there is exactly one disabled `activate` case plus one
+`activate-transaction` case. The active v3 release digest was independently
+recomputed as `sha256:af4dddfbc3b7b454d2c8cda516236de7b1799260c0a4807628d78d4020e05cac`,
+meeting v4 current-derived rollback preconditions.
+
+Transport package and core files are byte-identical to active v3. One direct
+v4 staged tokenless canary nevertheless passed: 200/200, zero final failures,
+IPv6 only, 24 recoveries, p50/p95/p99 `139/790/801 ms`, max `805 ms`, exit `0`.
+Current stayed v3; service active/enabled, one worker, `NRestarts=0`, strict
+health `ok:true`. No root mutation or activation was performed.
+
+## Sprintbox v4 transaction — server-side PASS, CJM smoke pending (2026-08-24)
+
+Root-installed v4 capability is
+`tak-ili-inache-admin:v4-current-derived-rollback`; effective sudo access works.
+The wrapper is root-owned `0750`; its protected sudoers file cannot be stat'ed
+by `admin`, but the effective rule is present and the root upgrade had validated
+it. Candidate digest and prior-v3 digest matched their staged evidence before
+one `activate-transaction` call. That call returned `0` and
+`activation transaction passed`; no rollback was used.
+
+`current` now resolves to `0.1.0-cjm-v1-wrapper-v4-20260824-local`; service is
+active/enabled with exactly one worker, `NRestarts=0`, RSS 34,752 KiB and a new
+main PID. After one full long-poll interval strict liveness plus delivery health
+is `ok:true`: successful-poll age 2 s, zero new handler/polling/reply errors.
+Webhook is disabled. Data health is `ok:true`; admin cannot list the protected
+data directory, so no contents were read and only health metadata was used.
+
+The post-v4 journal delta has two IPv6 `getUpdates` deliveries (~30.1 s each),
+with no retry or error. Older recovered pre-send timeouts belong to the prior
+v3 PID and are not attributed to v4. A local laptop process-list is unavailable
+to this sandbox (`sysmond` unavailable); server-side evidence proves one worker
+only. No Telegram command, prediction, publish, fixture or result was created.
+Next gate is command-first CJM v1 smoke; production remains NO-GO.
+
+## Sprintbox sequential-round P0 transaction — server-side PASS (2026-08-24)
+
+`0.1.0-sequential-round-p0-20260824-local` was staged without VCS, env,
+runtime data/drafts, venv, build, output or logs. Both required fixture files
+(`fixtures_sample.csv`, `fixtures_smoke_20260907.csv`) were present. A clean
+Sprintbox Python 3.13.5 install passed **87/87** / `OK`; compile, shell syntax,
+`systemd-analyze verify` and runtime-source sensitive scan (0 matched files)
+passed. The independently recomputed runtime digest exactly matched
+`sha256:74f7aa0719d0efa21d428190db8c9cbe0d6d5c8ae040e62b5d5828d5f1741d10`.
+
+The one canonical staged tokenless transport canary passed: 200/200 logical
+successes, zero final failures, IPv6 only, 25 recovered pre-send attempts,
+p50/p95/p99 `139/794/805 ms`, max `1495 ms`, exit `0`. Pre-activation strict
+health was `ok:true`; the active v4 target was left untouched until this gate
+passed. Backup/restore safety is covered by the remote suite's dedicated
+backup/restore health regression; no production runtime data was read, altered
+or restored during deployment.
+
+One and only one v4 transaction was executed:
+`activate-transaction 0.1.0-sequential-round-p0-20260824-local`. It returned
+exit `0` / `activation transaction passed`; wrapper rollback was not invoked.
+`current` now resolves to this sequential candidate. The unit is active and
+enabled with exactly one main polling worker, `NRestarts=0`, cgroup memory
+about 20 MiB and RSS about 36 MiB. Fresh strict liveness plus delivery health
+is `ok:true`, the active round remains `SMOKE-20260824`, and webhook is
+disabled. Protected data/drafts were not enumerated or read.
+
+Post-restart journal evidence shows delivered IPv6 `getUpdates` long-polls of
+about 30.1 s. Two brief connect-timeouts were recovered pre-send on the next
+attempt; no handler/reply/polling error was recorded by the new worker. Earlier
+HTTP/read failures belong to the prior worker and are not attributed to this
+release. No Telegram command, prediction, publication, fixture upload, result
+or close action was created. The next gate is owner-driven lifecycle/CJM smoke;
+production remains NO-GO.

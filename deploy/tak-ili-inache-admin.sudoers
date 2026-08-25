@@ -1,0 +1,6 @@
+# Admin has no generic root shell. The wrapper validates its own fixed commands.
+Cmnd_Alias TII_ADMIN = /usr/local/sbin/tak-ili-inache-admin *, \
+  sudoedit /etc/tak-ili-inache.env, \
+  sudoedit /etc/tak-ili-inache-backup.env, \
+  sudoedit /etc/tak-ili-inache-restic-password
+admin ALL=(root) NOPASSWD: TII_ADMIN

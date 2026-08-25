@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily encrypted external backup of Tak ili inache
+
+[Timer]
+OnCalendar=*-*-* 03:17:00 Europe/Moscow
+RandomizedDelaySec=15min
+Persistent=true
+Unit=tak-ili-inache-backup.service
+
+[Install]
+WantedBy=timers.target

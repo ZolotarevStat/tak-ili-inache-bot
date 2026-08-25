@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tak-ili-inache-bot"
+version = "0.1.0"
+description = "Domain core for the Tak ili inache football prediction game"
+requires-python = ">=3.11"
+dependencies = [
+  "Pillow>=10.4,<12",
+]
+
+[project.scripts]
+tak-ili-inache-polling = "tak_ili_inache.polling:main"
+tak-ili-inache-bootstrap-ids = "tak_ili_inache.bootstrap_ids:main"
+tak-ili-inache-transport-canary = "tak_ili_inache.transport_canary:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,370 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly RELEASES_DIR=/opt/tak-ili-inache/releases
+readonly INCOMING_DIR=/srv/tak-ili-inache/incoming
+readonly CURRENT_LINK=/opt/tak-ili-inache/current
+readonly SERVICE=tak-ili-inache.service
+readonly ENV_FILE=/etc/tak-ili-inache.env
+readonly WRAPPER_CAPABILITY="tak-ili-inache-admin:v5-delivery-recovery"
+readonly ACTIVATION_LOCK=/run/lock/tak-ili-inache-admin-activation.lock
+
+usage() {
+  echo "usage: tak-ili-inache-admin {install-release|activate-transaction|activate-delivery-recovery|status|journal|restart|health|prune|check-env|check-webhook|bootstrap-ids|capability} [candidate-id]" >&2
+  exit 64
+}
+
+valid_release_id() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]]
+}
+
+require_release_id() {
+  [[ $# -eq 2 ]] || usage
+  valid_release_id "$2" || { echo "invalid release id" >&2; exit 64; }
+}
+
+install_release() {
+  require_release_id "$@"
+  local release_id="$2"
+  local incoming="$INCOMING_DIR/$release_id"
+  local target="$RELEASES_DIR/$release_id"
+  [[ -d "$incoming" && ! -L "$incoming" ]] || { echo "incoming release is missing" >&2; exit 1; }
+  [[ ! -e "$target" ]] || { echo "release already exists" >&2; exit 1; }
+  [[ -z "$(find -L "$incoming" -type l -print -quit)" ]] || { echo "release contains symlink" >&2; exit 1; }
+  install -d -o root -g root -m 0755 "$target"
+  rsync -a --delete --safe-links "$incoming/" "$target/"
+  chown -R root:root "$target"
+  install -d -o takiliinache -g takiliinache -m 0750 "$target/src/tak_ili_inache_bot.egg-info"
+  install -d -o takiliinache -g takiliinache -m 0750 "$target/build"
+  python3 -m venv "$target/.venv"
+  chown -R takiliinache:takiliinache "$target/.venv"
+  runuser -u takiliinache -- "$target/.venv/bin/pip" install "$target"
+  cd "$target"
+  runuser -u takiliinache -- env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src \
+    "$target/.venv/bin/python" -m unittest discover -s "$target/tests" -v
+  runuser -u takiliinache -- env PYTHONPYCACHEPREFIX=/tmp/tak-ili-inache-pycache PYTHONPATH=src \
+    "$target/.venv/bin/python" -m compileall -q "$target/src" "$target/tests" "$target/scripts"
+  runuser -u takiliinache -- env PYTHONPATH=src "$target/.venv/bin/python" "$target/scripts/release_digest.py" --root "$target"
+}
+
+release_target() {
+  local release_id="$1"
+  printf '%s\n' "$RELEASES_DIR/$release_id"
+}
+
+validate_candidate_target() {
+  local release_id="$1"
+  local target
+  target="$(release_target "$release_id")"
+  validate_release_target "$target" || { echo "candidate release is invalid" >&2; return 1; }
+  [[ -f "$target/deploy/tak-ili-inache-admin.capability" && ! -L "$target/deploy/tak-ili-inache-admin.capability" ]] || { echo "candidate capability is missing" >&2; return 1; }
+  [[ "$(<"$target/deploy/tak-ili-inache-admin.capability")" == "$WRAPPER_CAPABILITY" ]] || { echo "candidate capability mismatch" >&2; return 1; }
+}
+
+validate_release_target() {
+  local target="$1" releases_root resolved owner mode
+  [[ -d "$target" && ! -L "$target" ]] || { echo "release target is missing or a symlink" >&2; return 1; }
+  releases_root="$(readlink -f -- "$RELEASES_DIR")" || return 1
+  resolved="$(readlink -f -- "$target")" || return 1
+  [[ "$(dirname "$resolved")" == "$releases_root" ]] || { echo "release target escapes releases directory" >&2; return 1; }
+  valid_release_id "$(basename "$resolved")" || { echo "release target id is invalid" >&2; return 1; }
+  owner="$(stat -c '%u' "$resolved")"; mode="$(stat -c '%a' "$resolved")"
+  [[ "$owner" == "0" ]] || { echo "release target is not root-owned" >&2; return 1; }
+  (( (8#$mode & 022) == 0 )) || { echo "release target is writable by group or other" >&2; return 1; }
+  [[ -f "$resolved/scripts/release_digest.py" && ! -L "$resolved/scripts/release_digest.py" && -x "$resolved/.venv/bin/python" ]] || { echo "release runtime is incomplete" >&2; return 1; }
+}
+
+runtime_digest() {
+  local target="$1"
+  runuser -u takiliinache -- "$target/.venv/bin/python" "$target/scripts/release_digest.py" --root "$target"
+}
+
+current_rollback_target() {
+  local target
+  target="$(readlink -f -- "$CURRENT_LINK")" || { echo "current target cannot be resolved" >&2; return 1; }
+  validate_release_target "$target" || { echo "current rollback target is invalid" >&2; return 1; }
+  printf '%s\n' "$target"
+}
+
+switch_current_target() {
+  local target="$1"
+  ln -sfn "$target" "$CURRENT_LINK.new"
+  mv -Tf "$CURRENT_LINK.new" "$CURRENT_LINK"
+  systemctl daemon-reload
+  systemctl enable "$SERVICE"
+}
+
+wait_for_health() {
+  local delivery_flag="$1" attempts="$2" attempt
+  local -a health_args=(--data-dir /var/lib/tak-ili-inache --require-liveness)
+  [[ -z "$delivery_flag" ]] || health_args+=("$delivery_flag")
+  for attempt in $(seq 1 "$attempts"); do
+    if runuser -u takiliinache -- "$CURRENT_LINK/.venv/bin/python" -m tak_ili_inache.health \
+      "${health_args[@]}" >/dev/null; then
+      return 0
+    fi
+    sleep 5
+  done
+  return 1
+}
+
+wait_for_liveness() {
+  wait_for_health "" 10
+}
+
+wait_for_delivery_health() {
+  # 24 five-second attempts are the explicit 120-second post-readiness window.
+  wait_for_health "--require-delivery-health" 24
+}
+
+legacy_red_baseline() {
+  local report
+  if ! report="$(runuser -u takiliinache -- "$CURRENT_LINK/.venv/bin/python" -m tak_ili_inache.health \
+    --data-dir /var/lib/tak-ili-inache --require-liveness)"; then
+    echo "delivery recovery baseline is not exact legacy-red" >&2
+    return 1
+  fi
+  if ! printf '%s' "$report" | python3 -c '
+import json
+import sys
+
+try:
+    report = json.load(sys.stdin)
+    liveness = report["liveness"]
+    count = liveness["reply_error_count"]
+    legacy_timestamp = liveness.get("last_reply_error_at")
+    exact = (
+        report["data_ok"] is True
+        and liveness["ok"] is True
+        and report["delivery_ok"] is False
+        and isinstance(count, int) and not isinstance(count, bool) and count > 0
+        and legacy_timestamp in (None, "")
+    )
+except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+    exact = False
+raise SystemExit(0 if exact else 1)
+'; then
+    echo "delivery recovery baseline is not exact legacy-red" >&2
+    return 1
+  fi
+}
+
+verify_candidate_unchanged() {
+  local candidate_id="$1" candidate_target="$2" candidate_digest="$3" observed
+  validate_candidate_target "$candidate_id" || { echo "CRITICAL: candidate target verification failed after candidate failure" >&2; return 1; }
+  [[ "$(readlink -f -- "$(release_target "$candidate_id")")" == "$candidate_target" ]] || { echo "CRITICAL: candidate target identity changed after candidate failure" >&2; return 1; }
+  observed="$(runtime_digest "$candidate_target")" || { echo "CRITICAL: candidate digest could not be calculated after candidate failure" >&2; return 1; }
+  [[ "$observed" == "$candidate_digest" ]] || { echo "CRITICAL: candidate digest changed after candidate failure" >&2; return 1; }
+}
+
+rollback_after_candidate_failure() {
+  local rollback_target="$1" rollback_digest="$2" candidate_id="$3" candidate_target="$4" candidate_digest="$5" rollback_mode="$6" observed restored
+  verify_candidate_unchanged "$candidate_id" "$candidate_target" "$candidate_digest" || return 1
+  validate_release_target "$rollback_target" || { echo "CRITICAL: rollback target verification failed after candidate failure" >&2; return 1; }
+  observed="$(runtime_digest "$rollback_target")" || { echo "CRITICAL: rollback digest could not be calculated after candidate failure" >&2; return 1; }
+  [[ "$observed" == "$rollback_digest" ]] || { echo "CRITICAL: rollback digest changed after candidate failure" >&2; return 1; }
+  switch_current_target "$rollback_target"
+  systemctl restart "$SERVICE"
+  restored="$(current_rollback_target)" || { echo "CRITICAL: restored current target verification failed" >&2; return 1; }
+  [[ "$restored" == "$rollback_target" ]] || { echo "CRITICAL: restored current identity changed" >&2; return 1; }
+  observed="$(runtime_digest "$restored")" || { echo "CRITICAL: restored current digest could not be calculated" >&2; return 1; }
+  [[ "$observed" == "$rollback_digest" ]] || { echo "CRITICAL: restored current digest changed" >&2; return 1; }
+  if [[ "$rollback_mode" == "legacy-red" ]]; then
+    wait_for_liveness || { echo "rollback data+liveness health failed" >&2; return 1; }
+    if runuser -u takiliinache -- "$CURRENT_LINK/.venv/bin/python" -m tak_ili_inache.health \
+      --data-dir /var/lib/tak-ili-inache --require-liveness --require-delivery-health >/dev/null; then
+      echo "CRITICAL: legacy-red delivery baseline unexpectedly green after restore" >&2
+      return 1
+    fi
+    echo "candidate failed; prior current restored; delivery baseline remains red" >&2
+    return 1
+  fi
+  wait_for_delivery_health || { echo "rollback health failed" >&2; return 1; }
+  echo "candidate failed; prior current restored" >&2
+  return 1
+}
+
+activate_transaction() {
+  [[ $# -eq 2 ]] || usage
+  local candidate_id="$2" candidate_target rollback_target rollback_digest candidate_digest
+  valid_release_id "$candidate_id" || { echo "invalid release id" >&2; exit 64; }
+  validate_candidate_target "$candidate_id" || { echo "CRITICAL: candidate target validation failed" >&2; exit 1; }
+  candidate_target="$(readlink -f -- "$(release_target "$candidate_id")")" || { echo "CRITICAL: candidate target cannot be resolved" >&2; exit 1; }
+  rollback_target="$(current_rollback_target)" || { echo "CRITICAL: current rollback target validation failed" >&2; exit 1; }
+  [[ "$candidate_target" != "$rollback_target" ]] || { echo "candidate is already current" >&2; exit 1; }
+  rollback_digest="$(runtime_digest "$rollback_target")" || { echo "current rollback digest failed" >&2; exit 1; }
+  candidate_digest="$(runtime_digest "$candidate_target")" || { echo "candidate digest failed" >&2; exit 1; }
+  [[ -n "$rollback_digest" && -n "$candidate_digest" ]] || { echo "empty release digest" >&2; exit 1; }
+  if ! switch_current_target "$candidate_target" || ! systemctl restart "$SERVICE" || ! wait_for_delivery_health; then
+    rollback_after_candidate_failure "$rollback_target" "$rollback_digest" "$candidate_id" "$candidate_target" "$candidate_digest" "strict"
+    exit 1
+  fi
+  verify_candidate_unchanged "$candidate_id" "$candidate_target" "$candidate_digest" || exit 1
+  echo "activation transaction passed"
+}
+
+activate_delivery_recovery() {
+  [[ $# -eq 2 ]] || usage
+  local candidate_id="$2" candidate_target rollback_target rollback_digest candidate_digest current_target
+  valid_release_id "$candidate_id" || { echo "invalid release id" >&2; exit 64; }
+  validate_candidate_target "$candidate_id" || { echo "CRITICAL: candidate target validation failed" >&2; exit 1; }
+  candidate_target="$(readlink -f -- "$(release_target "$candidate_id")")" || { echo "CRITICAL: candidate target cannot be resolved" >&2; exit 1; }
+  rollback_target="$(current_rollback_target)" || { echo "CRITICAL: current rollback target validation failed" >&2; exit 1; }
+  [[ "$candidate_target" != "$rollback_target" ]] || { echo "candidate is already current" >&2; exit 1; }
+  legacy_red_baseline || exit 1
+  rollback_digest="$(runtime_digest "$rollback_target")" || { echo "CRITICAL: current rollback digest failed" >&2; exit 1; }
+  candidate_digest="$(runtime_digest "$candidate_target")" || { echo "CRITICAL: candidate digest failed" >&2; exit 1; }
+  [[ -n "$rollback_digest" && -n "$candidate_digest" ]] || { echo "CRITICAL: empty release digest" >&2; exit 1; }
+  if ! switch_current_target "$candidate_target" || ! systemctl restart "$SERVICE" || ! wait_for_liveness; then
+    rollback_after_candidate_failure "$rollback_target" "$rollback_digest" "$candidate_id" "$candidate_target" "$candidate_digest" "legacy-red"
+    exit 1
+  fi
+  echo "candidate_delivery_ready"
+  if ! wait_for_delivery_health; then
+    rollback_after_candidate_failure "$rollback_target" "$rollback_digest" "$candidate_id" "$candidate_target" "$candidate_digest" "legacy-red"
+    exit 1
+  fi
+  current_target="$(current_rollback_target)" || { echo "CRITICAL: candidate current target validation failed" >&2; exit 1; }
+  [[ "$current_target" == "$candidate_target" ]] || { echo "CRITICAL: candidate current identity changed" >&2; exit 1; }
+  verify_candidate_unchanged "$candidate_id" "$candidate_target" "$candidate_digest" || exit 1
+  echo "delivery recovery transaction passed; candidate delivery health verified"
+}
+
+with_activation_lock() {
+  exec 9>"$ACTIVATION_LOCK"
+  flock -n 9 || { echo "activation already in progress" >&2; return 75; }
+  "$@"
+}
+
+run_as_worker_with_env() {
+  runuser -u takiliinache -- bash -c '
+    set -a
+    # The protected file is readable only by root and the worker group.
+    # It is sourced after dropping privileges, and its values are never echoed.
+    . /etc/tak-ili-inache.env
+    set +a
+    exec "$@"
+  ' -- "$@"
+}
+
+check_env() {
+  [[ $# -eq 1 ]] || usage
+  python3 - "$ENV_FILE" <<'PY'
+from __future__ import annotations
+
+import os
+import stat
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+metadata = path.stat()
+if stat.S_IMODE(metadata.st_mode) != 0o640:
+    raise SystemExit("env permissions are not 0640")
+if metadata.st_uid != 0:
+    raise SystemExit("env owner is not root")
+entries = {}
+for line in path.read_text(encoding="utf-8").splitlines():
+    if "=" in line and not line.lstrip().startswith("#"):
+        key, value = line.split("=", 1)
+        entries[key] = value
+if not entries.get("TELEGRAM_BOT_TOKEN", "").strip():
+    raise SystemExit("TELEGRAM_BOT_TOKEN is empty")
+print("env=token-present mode=0640 owner=root")
+PY
+}
+
+check_webhook() {
+  [[ $# -eq 1 ]] || usage
+  check_env check-env
+  run_as_worker_with_env "$CURRENT_LINK/.venv/bin/python" -c '
+import json
+import os
+import sys
+from urllib.request import urlopen
+
+token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+try:
+    with urlopen(f"https://api.telegram.org/bot{token}/getWebhookInfo", timeout=15) as response:
+        payload = json.load(response)
+    url = payload.get("result", {}).get("url", "") if payload.get("ok") else None
+except Exception:
+    print("webhook=check-failed", file=sys.stderr)
+    raise SystemExit(1)
+if url:
+    print("webhook=enabled", file=sys.stderr)
+    raise SystemExit(1)
+print("webhook=disabled")
+'
+}
+
+bootstrap_ids() {
+  [[ $# -eq 1 ]] || usage
+  systemctl is-active --quiet "$SERVICE" && { echo "worker must be inactive before bootstrap" >&2; exit 1; }
+  check_webhook check-webhook
+  run_as_worker_with_env "$CURRENT_LINK/.venv/bin/tak-ili-inache-bootstrap-ids" |
+    python3 -c '
+from __future__ import annotations
+
+import json
+import os
+import stat
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+pairs = json.load(sys.stdin)
+private = [item["message_from_id"] for item in pairs if item["message_from_id"] > 0 and item["message_chat_id"] == item["message_from_id"]]
+groups = [item for item in pairs if item["message_chat_id"] < 0]
+if len(private) != 1 or len(groups) != 1 or groups[0]["message_from_id"] != private[0]:
+    raise SystemExit("expected exactly one private /start and one matching group message")
+replacement = {
+    "TAK_ILI_INACHE_ADMIN_IDS": str(private[0]),
+    "TOURNAMENT_CHAT_ID": str(groups[0]["message_chat_id"]),
+}
+seen = set()
+updated = []
+for line in path.read_text(encoding="utf-8").splitlines():
+    key, separator, _ = line.partition("=")
+    if separator and key in replacement:
+        updated.append(f"{key}={replacement[key]}")
+        seen.add(key)
+    else:
+        updated.append(line)
+if seen != replacement.keys():
+    raise SystemExit("required Telegram ID variables are missing from env")
+content = "\n".join(updated) + "\n"
+temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o640)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
+    current = path.stat()
+    os.chown(temporary, current.st_uid, current.st_gid)
+    os.chmod(temporary, stat.S_IMODE(current.st_mode))
+    os.replace(temporary, path)
+except BaseException:
+    temporary.unlink(missing_ok=True)
+    raise
+print("telegram_ids=written")
+' "$ENV_FILE"
+}
+
+case "${1:-}" in
+  install-release) install_release "$@" ;;
+  status) [[ $# -eq 1 ]] || usage; systemctl status "$SERVICE" --no-pager ;;
+  journal) [[ $# -eq 1 ]] || usage; journalctl -u "$SERVICE" -n 100 --no-pager ;;
+  restart) [[ $# -eq 1 ]] || usage; systemctl restart "$SERVICE"; systemctl is-active "$SERVICE" ;;
+  activate) echo "direct activation is disabled; use activate-transaction" >&2; exit 64 ;;
+  activate-transaction) with_activation_lock activate_transaction "$@" ;;
+  activate-delivery-recovery) with_activation_lock activate_delivery_recovery "$@" ;;
+  health) [[ $# -eq 1 ]] || usage; runuser -u takiliinache -- "$CURRENT_LINK/.venv/bin/python" -m tak_ili_inache.health --data-dir /var/lib/tak-ili-inache --require-liveness --require-delivery-health ;;
+  prune) [[ $# -eq 1 ]] || usage; exec /usr/local/libexec/tak-ili-inache/tak-ili-inache-prune-releases ;;
+  check-env) check_env "$@" ;;
+  check-webhook) check_webhook "$@" ;;
+  bootstrap-ids) bootstrap_ids "$@" ;;
+  capability) [[ $# -eq 1 ]] || usage; printf 'capability=%s\n' "$WRAPPER_CAPABILITY" ;;
+  *) usage ;;
+esac
