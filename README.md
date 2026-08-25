@@ -37,10 +37,11 @@ bash -n deploy/tak-ili-inache-admin \
   deploy/tak-ili-inache-prune-releases
 ```
 
-The audited candidate passed 145 unit/integration tests. See `LOCAL_SMOKE.md`
-for the bounded tester workflow and `RUNBOOK.md` for deployment and recovery
-procedures. All addresses and identifiers in committed documentation are
-placeholders; secrets must be supplied only through the deployment environment.
+The audited candidate passed 145 unit/integration tests. See `PILOT_GUIDE.md`
+for participant/admin operations, `LOCAL_SMOKE.md` for the bounded technical
+acceptance workflow and `RUNBOOK.md` for deployment and recovery procedures.
+All addresses and identifiers in committed documentation are placeholders;
+secrets must be supplied only through the deployment environment.
 
 ## Repository contents
 
@@ -49,8 +50,10 @@ placeholders; secrets must be supplied only through the deployment environment.
 - `data/fixtures_sample.csv` and `data/fixtures_smoke_20260907.csv` — synthetic
   fixtures required by tests and smoke preparation;
 - `deploy/` and `scripts/` — explicit operational helpers;
+- `PILOT_GUIDE.md` — copy-ready participant instructions and the administrator
+  lifecycle;
 - `CJM_SPEC.md`, `LOCAL_SMOKE.md`, `RUNBOOK.md` and `RELEASE_MANIFEST.md` —
-  product, smoke and release contracts.
+  product, smoke, operations and release contracts.
 
 Runtime CSV files, drafts, participant exports, results, backups, logs, generated
 charts, private pilot fixtures and credential files are intentionally excluded.
