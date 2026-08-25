@@ -17,6 +17,8 @@ PYTHONPATH=src python3 -m tak_ili_inache.polling
 `sha256:c68e07363c469eefa32f6f58d2ee3bfd8e00ecbad1d155294bd05bdf0bee5fa4`.
 Remote staging, activation and strict health passed; this document remains the
 bounded regression workflow for every future candidate.
+Git `main` has provider-neutral comment-only deploy deltas and therefore a
+separate undeployed digest `sha256:8fe429f2c222179c0e5e2a65715a0e2ed50b0e6b6f1ec05c3dd977718434b203`.
 
 ## Обязательный внешний command-first canary
 

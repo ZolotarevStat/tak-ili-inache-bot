@@ -6,14 +6,20 @@
 |---|---|
 | Package | `tak-ili-inache-bot` |
 | Version | `0.1.0` |
-| Release status | `DEPLOYED / PILOT GO WITH CONDITIONS` |
+| Release status | `GIT BASELINE PUBLISHED / VDS ACTIVE / PILOT GO WITH CONDITIONS` |
 | Open gate | close active smoke → load current real CSV → participant pilot |
-| Repository HEAD | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` before the infra acceptance commit |
-| Short SHA | `cf778ea` before the infra acceptance commit |
+| Application MVP baseline commit | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` |
+| S3/infra publication commit | `4a3540f98f6c310c7a842caaf9679218802b15a0` |
 | Release ID | `0.1.0-cjm-v1-2-close-integrity-20260825-local` |
 | Local verification at | `2026-08-25, CJM v1.2 + infra-v6.3.7, 145-test local pass` |
 | Python | `3.12.7` local; `3.13.5` VDS |
-| Runtime digest | `sha256:c68e07363c469eefa32f6f58d2ee3bfd8e00ecbad1d155294bd05bdf0bee5fa4` |
+| Active VDS runtime digest | `sha256:c68e07363c469eefa32f6f58d2ee3bfd8e00ecbad1d155294bd05bdf0bee5fa4` |
+| Git main runtime digest ×2 | `sha256:8fe429f2c222179c0e5e2a65715a0e2ed50b0e6b6f1ec05c3dd977718434b203` |
+
+The Git/VDS digest difference is limited to provider-neutral comments in three
+tracked deploy configuration examples. Executable Python and shell logic is
+unchanged. The Git identity is intentionally not claimed as deployed; the VDS
+identity above remains the pilot baseline until a future transactional release.
 
 ## Historical VDS deployment gate — predates current local candidate
 
@@ -82,8 +88,8 @@ operational status. S3 credentials were transferred directly to root-owned
 | Historical VDS staged verification | PASS (older candidate only) | immutable sequential tree; Python 3.13.5 clean install; `Ran 87 tests` / `OK`; compile, shell, sensitive scan and `systemd-analyze verify` passed; does not verify the current local candidate |
 | Historical tokenless transport gate | PASS (older candidate only) | sequential canonical run: 200/200, IPv6 only, p95 794 ms, p99 805 ms, exit 0; 25 recovered pre-send failures, zero final failures |
 | Historical active sequential release | PASS (older candidate only) | v4 transaction activated candidate; one worker, strict health and IPv6 long-polls passed; not evidence for this local candidate |
-| Current candidate staging / remote verification | PASS | immutable application release and runtime digest verified on VDS |
-| Current candidate activation | PASS | `current` is `0.1.0-cjm-v1-2-close-integrity-20260825-local`; worker and health green |
+| Active VDS release staging / remote verification | PASS | immutable application release and active VDS digest verified |
+| Active VDS release activation | PASS | `current` is `0.1.0-cjm-v1-2-close-integrity-20260825-local`; worker and health green |
 | Participant pilot | READY WITH CONDITION | close `SMOKE-20260907`, then upload/activate the current real fixtures CSV |
 
 Tests emitted one non-blocking Python 3.14 `tarfile.extractall` deprecation warning. The verified runtime is Python 3.12.7 and archive paths are validated before extraction.

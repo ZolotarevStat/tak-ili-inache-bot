@@ -145,6 +145,9 @@ ssh -i ~/.ssh/<VDS_ADMIN_KEY> admin@<VDS_HOST> '
 `sha256:c68e07363c469eefa32f6f58d2ee3bfd8e00ecbad1d155294bd05bdf0bee5fa4`.
 Immutable remote staging, transactional activation and strict health already
 passed for this identity. Repeat the checks below for every future release.
+Git `main` is provider-neutral and has a separate undeployed comment-only digest
+`sha256:8fe429f2c222179c0e5e2a65715a0e2ed50b0e6b6f1ec05c3dd977718434b203`;
+do not claim it as the active VDS identity without a new transaction.
 
 ```bash
 cd <PROJECT_DIR>
