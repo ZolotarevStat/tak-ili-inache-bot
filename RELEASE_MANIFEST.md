@@ -10,16 +10,16 @@
 | Open gate | none for the participant pilot; Grafana and product notifications remain non-blocking P1 |
 | Application MVP baseline commit | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` |
 | S3/infra publication commit | `4a3540f98f6c310c7a842caaf9679218802b15a0` |
-| Release ID | `0.1.0-cjm-v1-2-close-integrity-20260825-local` |
-| Local verification at | `2026-08-25, CJM v1.2 + infra-v6.3.7, 145-test local pass` |
+| Active application feature commit | `3df890d` on `feature/group-admin-ux-p1` |
+| Release ID | `0.1.0-group-admin-ux-p1-r2-20260825-local` |
+| Local verification at | `2026-08-25, group/admin UX P1 + infra-v6.3.7, 147-test local and remote pass` |
 | Python | `3.12.7` local; `3.13.5` VDS |
-| Active VDS runtime digest | `sha256:c68e07363c469eefa32f6f58d2ee3bfd8e00ecbad1d155294bd05bdf0bee5fa4` |
+| Active VDS runtime digest | `sha256:eb73b60883f676656e474c9b25399f6b0545c77761eee58b12a2c5821e5bbc92` |
 | Git main runtime digest ×2 | `sha256:8fe429f2c222179c0e5e2a65715a0e2ed50b0e6b6f1ec05c3dd977718434b203` |
 
-The Git/VDS digest difference is limited to provider-neutral comments in three
-tracked deploy configuration examples. Executable Python and shell logic is
-unchanged. The Git identity is intentionally not claimed as deployed; the VDS
-identity above remains the pilot baseline until a future transactional release.
+The active VDS runtime exactly matches the tested feature-branch candidate.
+`main` remains the prior published baseline and intentionally differs by the
+bounded group/admin UX delta until the pull request is merged.
 
 ## Historical VDS deployment gate — predates current local candidate
 
@@ -45,23 +45,26 @@ Planning-документы, audits, tests, runtime data, venv и build products
 
 ## Verification results
 
-## Group/admin UX P1 candidate — LOCAL PASS / DEPLOY PENDING
+## Group/admin UX P1 — LOCAL PASS / REMOTE PASS / ACTIVE
 
 | Field | Value |
 |---|---|
-| Release ID | `0.1.0-group-admin-ux-p1-20260825-local` |
+| Release ID | `0.1.0-group-admin-ux-p1-r2-20260825-local` |
 | Runtime digest ×2 | `sha256:eb73b60883f676656e474c9b25399f6b0545c77761eee58b12a2c5821e5bbc92` |
 | Scope | command `@username` normalization; silent ordinary group updates; safe private redirect; stage-aware status/publish/results/scoring buttons |
 | Domain/data delta | none; prediction rules, persistence, scoring, transport and active round are unchanged |
 | Full suite | `Ran 147 tests` / `OK` |
 | Static/sensitive verification | compile, shell syntax, diff check and sensitive scan PASS |
-| External status | immutable remote install, transaction and strict health pending |
+| External status | immutable remote install and v5 activation transaction PASS; strict data/liveness/delivery health green; control S3 backup PASS |
 
 Acceptance `AC-59…AC-62` covers public `/help@bot_username` and
 `/rules@bot_username`, group silence for ordinary text/media, blocking of
 sensitive group actions, and the admin dashboard before/after deadline. The
-candidate must preserve active `PILOT-20260826`, one worker and green strict
-delivery health through a normal v5 activation transaction.
+activation preserved active `PILOT-20260826`, one worker and green strict
+delivery health. `NRestarts=0` after activation. The first immutable install ID
+failed before activation because a staging directory mode `0700` propagated to
+the release root; the corrected `r2` incoming root was explicitly fixed to
+`0755`, passed all remote tests and was the only candidate activated.
 
 ## Infra-v6.3.7 S3 acceptance — LOCAL PASS / REMOTE PASS / BACKUP ACTIVE
 
@@ -87,7 +90,7 @@ operational status. S3 credentials were transferred directly to root-owned
 
 | Проверка | Результат | Evidence |
 |---|---:|---|
-| Unit/integration suite | PASS | `Ran 145 tests` / `OK`; includes coherent backup locking, isolated restore traversal and enabled-timer status |
+| Unit/integration suite | PASS | `Ran 147 tests` / `OK` locally and remotely; includes group/admin UX, coherent backup locking, isolated restore traversal and enabled-timer status |
 | Clean Python 3.12 venv install | PASS | fresh isolated PEP 517 venv: downloaded build dependency `setuptools>=68`, `pip install .` built/installed package, then `import tak_ili_inache` resolved from venv site-packages |
 | Python 3.13 | NOT AVAILABLE LOCALLY | `python3.13` отсутствует; не заявляется как проверенный этим локальным циклом |
 | Python compile | PASS | `src`, `tests`, `scripts`, exit 0 |
@@ -98,7 +101,7 @@ operational status. S3 credentials were transferred directly to root-owned
 | Liveness health / observability | PASS | `delivery_ok` requires healthy liveness and an outbound delivery at/after the last reply error; cumulative diagnostic count is retained, legacy count-only snapshots fail closed, and CLI/wrapper still exit non-zero for `ok:false` |
 | PNG reporting | PASS | три PNG имеют сигнатуру, ненулевые размеры и открываются Pillow; exact series сверены с `scoring.csv`/`leaderboard.csv`; Telegram flow использует `sendPhoto` с русскими captions, типы ставок подписаны «Ординары»/«Экспрессы» |
 | Tokenless transport gate | PASS (local fault model) | 200 logical IPv6 calls recover 7–10% first-attempt timeouts; repeated outage fails closed/non-zero; logical p95/p99 contract is documented |
-| Smoke acceptance docs | PASS | `LOCAL_SMOKE.md`, `RUNBOOK.md` and this manifest name the factual 145-test local gate |
+| Smoke acceptance docs | PASS | `LOCAL_SMOKE.md`, `PILOT_GUIDE.md`, `RUNBOOK.md` and this manifest cover the factual 147-test group/admin gate |
 | Deployment helper | PASS | `getUpdates` читает только sender/chat IDs до старта worker; token берётся только из env и не попадает в output/errors |
 | Restricted wrapper compatibility | PASS | v5 keeps v4 current-derived canonical root-owned path/digest/tamper validation and disabled generic `activate`; it adds only `activate-delivery-recovery` for the exact legacy-red baseline, candidate liveness marker, 120 s reply-delivery gate and honest red rollback |
 | Shell syntax | PASS | `bash -n` for admin, wrapper-upgrade, backup and prune scripts, exit 0 |
@@ -107,20 +110,22 @@ operational status. S3 credentials were transferred directly to root-owned
 | Historical tokenless transport gate | PASS (older candidate only) | sequential canonical run: 200/200, IPv6 only, p95 794 ms, p99 805 ms, exit 0; 25 recovered pre-send failures, zero final failures |
 | Historical active sequential release | PASS (older candidate only) | v4 transaction activated candidate; one worker, strict health and IPv6 long-polls passed; not evidence for this local candidate |
 | Active VDS release staging / remote verification | PASS | immutable application release and active VDS digest verified |
-| Active VDS release activation | PASS | `current` is `0.1.0-cjm-v1-2-close-integrity-20260825-local`; worker and health green |
+| Active VDS release activation | PASS | `current` is `0.1.0-group-admin-ux-p1-r2-20260825-local`; digest `eb73…bc92`; worker and strict health green |
 | Participant pilot | PASS / GO | `SMOKE-20260907` archived; `PILOT-20260826` active; strict data/liveness/delivery health green; one worker, `NRestarts=0`; post-activation S3 backup and freshness checks `success/0` |
 
 Tests emitted one non-blocking Python 3.14 `tarfile.extractall` deprecation warning. The verified runtime is Python 3.12.7 and archive paths are validated before extraction.
 
-## CJM v1.2 local candidate — 2026-08-25
+## CJM v1.2 predecessor — 2026-08-25
 
-`0.1.0-cjm-v1-2-close-integrity-20260825-local` is the **active VDS release**. Its runtime-only
+`0.1.0-cjm-v1-2-close-integrity-20260825-local` is the verified predecessor of
+the active group/admin UX release. Its runtime-only
 digest was calculated twice as
 `sha256:c68e07363c469eefa32f6f58d2ee3bfd8e00ecbad1d155294bd05bdf0bee5fa4`.
 The consolidated suite is `Ran 145 tests` / `OK`. Compile, shell syntax,
 sensitive scan, immutable remote staging, transactional activation and strict
-health passed. The real round `PILOT-20260826` is active and the participant
-pilot is GO. Grafana and product reminders remain non-blocking P1.
+health passed before it was superseded. The real round `PILOT-20260826` remains
+active and the participant pilot is GO. Grafana and product reminders remain
+non-blocking P1.
 
 The delta is bounded to participant CJM: one correction draft cloned from the
 confirmed coupon; internal stable selection/bet identities; compatible
