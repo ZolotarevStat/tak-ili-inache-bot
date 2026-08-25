@@ -139,12 +139,13 @@ ssh -i ~/.ssh/<VDS_ADMIN_KEY> admin@<VDS_HOST> '
 
 ## 2. Local verification and release identity
 
-Текущий активный application release:
-`0.1.0-cjm-v1-2-close-integrity-20260825-local`; suite contract
-`Ran 145 tests` / `OK`; runtime digest ×2
-`sha256:c68e07363c469eefa32f6f58d2ee3bfd8e00ecbad1d155294bd05bdf0bee5fa4`.
-Immutable remote staging, transactional activation and strict health already
-passed for this identity. Repeat the checks below for every future release.
+Текущий **undeployed local** notification candidate:
+`0.1.0-product-notifications-p1-20260825-local`; suite contract
+`Ran 151 tests` / `OK`; runtime digest ×2
+`sha256:81c62d74f0d3b0318fc439be59bfabd26efd11580e98fa31d5886a53ed6ed5d8`.
+Deployed baseline остаётся `0.1.0-cjm-v1-2-close-integrity-20260825-local` и
+не менялся. Для нового candidate обязательны fresh clean install, remote
+staging, transaction и notification smoke.
 
 ```bash
 cd <PROJECT_DIR>
@@ -164,7 +165,7 @@ Sensitive scan must return no matches:
 Set the release ID after the digest is recorded in the deployment evidence:
 
 ```bash
-export TII_RELEASE_ID="0.1.0-cjm-v1-2-close-integrity-20260825-local"
+export TII_RELEASE_ID="0.1.0-product-notifications-p1-20260825-local"
 export TII_VDS_HOST=<VDS_HOST>
 ```
 
@@ -185,7 +186,7 @@ rsync -az --delete \
 On the VDS, install and validate before switching `current`:
 
 ```bash
-export TII_RELEASE_ID="0.1.0-cjm-v1-2-close-integrity-20260825-local"
+export TII_RELEASE_ID="0.1.0-product-notifications-p1-20260825-local"
 sudo install -d -o root -g root -m 0755 "/opt/tak-ili-inache/releases/${TII_RELEASE_ID}"
 sudo rsync -a --delete \
   "/srv/tak-ili-inache/incoming/${TII_RELEASE_ID}/" \

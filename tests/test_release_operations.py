@@ -238,12 +238,12 @@ class ReleaseOperationsTests(unittest.TestCase):
         candidate_id = manifest_id.group(1)
         exported_ids = re.findall(r'^export TII_RELEASE_ID="([^"]+)"$', runbook, re.MULTILINE)
         self.assertEqual(exported_ids, [candidate_id, candidate_id])
-        runtime_digest = "sha256:c68e07363c469eefa32f6f58d2ee3bfd8e00ecbad1d155294bd05bdf0bee5fa4"
+        runtime_digest = "sha256:81c62d74f0d3b0318fc439be59bfabd26efd11580e98fa31d5886a53ed6ed5d8"
         self.assertNotIn("--no-build-isolation", runbook)
         for artifact in (manifest, smoke, runbook):
             self.assertIn(candidate_id, artifact)
             self.assertIn(runtime_digest, artifact)
-            self.assertIn("Ran 145 tests", artifact)
+            self.assertIn("Ran 151 tests", artifact)
         self.assertIn("Sequential-round acceptance", smoke)
         self.assertRegex(runbook, r"Any active\s+`SMOKE-\*` round, before or after its deadline")
         self.assertNotIn("An expired\n`SMOKE-*` round", runbook)

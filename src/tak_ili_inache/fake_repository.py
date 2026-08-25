@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from .models import BetResult, Participant, Prediction, Round
+from .models import BetResult, Participant, Prediction, ProductNotification, Round
 from .repository import Repository
 
 
@@ -18,6 +18,7 @@ class FakeRepository(Repository):
         self._results: dict[str, BetResult] = {}
         self._update_ids: set[str] = set()
         self._operations: dict[str, str] = {}
+        self._product_notifications: dict[str, ProductNotification] = {}
 
     def save_round(self, round_: Round, actor_id: str = "", imported_at: str = "") -> None:
         active = self.get_active_round()
@@ -119,3 +120,37 @@ class FakeRepository(Repository):
             self._operations[operation_key] = "done"
         else:
             self._operations.pop(operation_key, None)
+
+    def ensure_product_notifications(self, notifications: tuple[ProductNotification, ...]) -> None:
+        for notification in notifications:
+            existing = self._product_notifications.get(notification.notification_key)
+            if existing and (
+                existing.round_id,
+                existing.event,
+                existing.revision,
+                existing.recipient_fingerprint,
+            ) != (
+                notification.round_id,
+                notification.event,
+                notification.revision,
+                notification.recipient_fingerprint,
+            ):
+                raise ValueError("Product notification key collision.")
+            self._product_notifications.setdefault(notification.notification_key, notification)
+
+    def product_notifications(self) -> tuple[ProductNotification, ...]:
+        return tuple(self._product_notifications.values())
+
+    def transition_product_notification(self, notification_key: str, expected_status: str, new_status: str) -> bool:
+        current = self._product_notifications.get(notification_key)
+        if not current or current.status != expected_status:
+            return False
+        self._product_notifications[notification_key] = ProductNotification(
+            current.notification_key,
+            current.round_id,
+            current.event,
+            current.revision,
+            current.recipient_fingerprint,
+            new_status,
+        )
+        return True

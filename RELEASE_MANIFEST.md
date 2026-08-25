@@ -6,14 +6,20 @@
 |---|---|
 | Package | `tak-ili-inache-bot` |
 | Version | `0.1.0` |
-| Release status | `DEPLOYED / PILOT GO WITH CONDITIONS` |
-| Open gate | close active smoke → load current real CSV → participant pilot |
+| Release status | `LOCAL NOTIFICATION P1 PASS / DEPLOYED BASELINE UNCHANGED / REMOTE PENDING / PRODUCTION GO NOT EXTENDED` |
+| Open gate | clean install of this source delta → immutable staging → transaction → notification smoke |
 | Repository HEAD | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` before the infra acceptance commit |
 | Short SHA | `cf778ea` before the infra acceptance commit |
-| Release ID | `0.1.0-cjm-v1-2-close-integrity-20260825-local` |
-| Local verification at | `2026-08-25, CJM v1.2 + infra-v6.3.7, 145-test local pass` |
+| Release ID | `0.1.0-product-notifications-p1-20260825-local` |
+| Local verification at | `2026-08-25, event notification P1, 151-test local pass` |
 | Python | `3.12.7` local; `3.13.5` VDS |
-| Runtime digest | `sha256:c68e07363c469eefa32f6f58d2ee3bfd8e00ecbad1d155294bd05bdf0bee5fa4` |
+| Runtime digest | `sha256:81c62d74f0d3b0318fc439be59bfabd26efd11580e98fa31d5886a53ed6ed5d8` |
+
+The deployed baseline remains
+`0.1.0-cjm-v1-2-close-integrity-20260825-local` with digest
+`sha256:c68e07363c469eefa32f6f58d2ee3bfd8e00ecbad1d155294bd05bdf0bee5fa4`.
+It was not uploaded, switched, restarted or otherwise changed by this local
+notification slice.
 
 ## Historical VDS deployment gate — predates current local candidate
 
@@ -63,18 +69,19 @@ operational status. S3 credentials were transferred directly to root-owned
 
 | Проверка | Результат | Evidence |
 |---|---:|---|
-| Unit/integration suite | PASS | `Ran 145 tests` / `OK`; includes coherent backup locking, isolated restore traversal and enabled-timer status |
-| Clean Python 3.12 venv install | PASS | fresh isolated PEP 517 venv: downloaded build dependency `setuptools>=68`, `pip install .` built/installed package, then `import tak_ili_inache` resolved from venv site-packages |
+| Unit/integration suite | PASS (local) | `Ran 151 tests` / `OK`; includes product notification outbox and all earlier regression coverage |
+| Clean Python 3.12 venv install | PENDING for this source delta | not reused from deployed baseline; requires a fresh PEP 517 install before staging |
 | Python 3.13 | NOT AVAILABLE LOCALLY | `python3.13` отсутствует; не заявляется как проверенный этим локальным циклом |
 | Python compile | PASS | `src`, `tests`, `scripts`, exit 0 |
 | Transport/polling P0 | PASS | IPv6 0.6 s connect/TLS phase timeout; bounded pre-send retry/re-resolution; no post-send replay; `getUpdates(30)` resets connected TLS socket to request-scoped 40 s before HTTP write; exponential poll failure backoff |
 | CJM v1.2 partial edit | PASS (local) | E2 selected-match removal, W1 atomic reconciliation, typed correction clone/R1, stable selection/bet identities, R0 blank full replacement, stale/double/restart and v1/v2 snapshot compatibility |
 | Draft edit delivery ambiguity | PASS (local) | applied edit + lost response propagates `UnknownDeliveryError`; no `sendMessage` fallback/second card; durable revision, stale replay and restart keep one-card semantics; only deterministic edit rejection may fall back |
 | Sequential-round lifecycle P0 + close integrity P1 | PASS (local) | active `SMOKE-*` two-step close is allowed before/after deadline and regardless of scoring/results/publish; exact nonempty one-shot token binds requesting admin+round+checksum, pending outbox blocks; durable close intent recovers either rounds/audit crash boundary to `closed` + exactly one `round_closed` audit; regular policy/no auto-switch/history/result scope remain fail-closed |
+| Product notifications P1 | PASS (local) | separate `product_notifications.csv` records one pseudonymous recipient delivery per event/revision; activation, completed group publish and completed scoring trigger `round_opened`/`predictions_published`/`results_ready`; generic lifecycle outbox is untouched; unknown or crash-after-send becomes terminal `unknown` without blind replay |
 | Liveness health / observability | PASS | `delivery_ok` requires healthy liveness and an outbound delivery at/after the last reply error; cumulative diagnostic count is retained, legacy count-only snapshots fail closed, and CLI/wrapper still exit non-zero for `ok:false` |
 | PNG reporting | PASS | три PNG имеют сигнатуру, ненулевые размеры и открываются Pillow; exact series сверены с `scoring.csv`/`leaderboard.csv`; Telegram flow использует `sendPhoto` с русскими captions, типы ставок подписаны «Ординары»/«Экспрессы» |
 | Tokenless transport gate | PASS (local fault model) | 200 logical IPv6 calls recover 7–10% first-attempt timeouts; repeated outage fails closed/non-zero; logical p95/p99 contract is documented |
-| Smoke acceptance docs | PASS | `LOCAL_SMOKE.md`, `RUNBOOK.md` and this manifest name the factual 145-test local gate |
+| Smoke acceptance docs | PENDING | notification-specific external smoke is required for this new candidate |
 | Deployment helper | PASS | `getUpdates` читает только sender/chat IDs до старта worker; token берётся только из env и не попадает в output/errors |
 | Restricted wrapper compatibility | PASS | v5 keeps v4 current-derived canonical root-owned path/digest/tamper validation and disabled generic `activate`; it adds only `activate-delivery-recovery` for the exact legacy-red baseline, candidate liveness marker, 120 s reply-delivery gate and honest red rollback |
 | Shell syntax | PASS | `bash -n` for admin, wrapper-upgrade, backup and prune scripts, exit 0 |
@@ -82,9 +89,9 @@ operational status. S3 credentials were transferred directly to root-owned
 | Historical VDS staged verification | PASS (older candidate only) | immutable sequential tree; Python 3.13.5 clean install; `Ran 87 tests` / `OK`; compile, shell, sensitive scan and `systemd-analyze verify` passed; does not verify the current local candidate |
 | Historical tokenless transport gate | PASS (older candidate only) | sequential canonical run: 200/200, IPv6 only, p95 794 ms, p99 805 ms, exit 0; 25 recovered pre-send failures, zero final failures |
 | Historical active sequential release | PASS (older candidate only) | v4 transaction activated candidate; one worker, strict health and IPv6 long-polls passed; not evidence for this local candidate |
-| Current candidate staging / remote verification | PASS | immutable application release and runtime digest verified on VDS |
-| Current candidate activation | PASS | `current` is `0.1.0-cjm-v1-2-close-integrity-20260825-local`; worker and health green |
-| Participant pilot | READY WITH CONDITION | close `SMOKE-20260907`, then upload/activate the current real fixtures CSV |
+| Current candidate staging / remote verification | PENDING | deployed baseline evidence does not verify this source delta |
+| Current candidate activation | PENDING | `current` remains the unchanged close-integrity baseline |
+| Participant pilot | NOT EXTENDED | notification candidate needs clean install, staging and notification smoke first |
 
 Tests emitted one non-blocking Python 3.14 `tarfile.extractall` deprecation warning. The verified runtime is Python 3.12.7 and archive paths are validated before extraction.
 

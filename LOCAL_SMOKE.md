@@ -11,12 +11,12 @@ export TELEGRAM_BOT_TOKEN='<TEST_BOT_TOKEN>'
 PYTHONPATH=src python3 -m tak_ili_inache.polling
 ```
 
-Локальный suite перед smoke должен завершиться как `Ran 145 tests` и `OK`.
-Актуальная active release identity:
-`0.1.0-cjm-v1-2-close-integrity-20260825-local`, runtime digest ×2
-`sha256:c68e07363c469eefa32f6f58d2ee3bfd8e00ecbad1d155294bd05bdf0bee5fa4`.
-Remote staging, activation and strict health passed; this document remains the
-bounded regression workflow for every future candidate.
+Локальный suite перед smoke должен завершиться как `Ran 151 tests` и `OK`.
+Актуальная undeployed notification candidate identity:
+`0.1.0-product-notifications-p1-20260825-local`, runtime digest ×2
+`sha256:81c62d74f0d3b0318fc439be59bfabd26efd11580e98fa31d5886a53ed6ed5d8`.
+Remote staging, activation и strict health для этого candidate не выполнялись;
+deployed baseline остаётся без изменений.
 
 ## Обязательный внешний command-first canary
 

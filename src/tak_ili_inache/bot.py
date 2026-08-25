@@ -12,7 +12,8 @@ from itertools import permutations
 from typing import Callable
 
 from .fixtures import import_fixtures
-from .models import Bet, BetEvent, BetResult, BetType, Market, Prediction, Round
+from .models import Bet, BetEvent, BetResult, BetType, Market, Prediction, ProductNotification, Round
+from .notifications import PREDICTIONS_PUBLISHED, RESULTS_READY, ROUND_OPENED, notification_key, notification_text, recipient_fingerprint
 from .reporting import build_reports
 from .repository import Repository
 from .delivery import UnknownDeliveryError
@@ -103,6 +104,7 @@ class BotService:
         self._pending_outbox_tokens: dict[tuple[str, str], str] = {}
         self.draft_store = draft_store
         self._restore_drafts()
+        self._recover_product_notifications()
 
     def handle_update(self, update: dict) -> None:
         self._current_update_id = str(update.get("update_id", ""))
@@ -412,8 +414,13 @@ class BotService:
         if existing:
             self.telegram.send_message(chat_id, f"Активный тур {existing.round_id} уже существует; перезапись заблокирована.")
             return
+        # Plan before the domain commit, but release only once the candidate is
+        # provably active. A crash cannot produce an early message or lose the
+        # event after a successful activation.
+        self._plan_product_notifications(candidate, ROUND_OPENED, candidate.checksum)
         self.repository.save_round(candidate, actor_id=telegram_id, imported_at=self.now().isoformat())
         self.pending_imports.pop(telegram_id, None)
+        self._recover_product_notifications()
         self.telegram.send_message(chat_id, f"Тур {candidate.round_id} активирован.")
 
     def _replace_pending(self, chat_id: int, telegram_id: str) -> None:
@@ -512,7 +519,9 @@ class BotService:
         names = {item.participant_id: item.display_name for item in self.repository.participants()}
         revision = hashlib.sha256(repr((predictions, sorted(names.items()))).encode()).hexdigest()[:16]
         operation_key = f"publish:{round_.round_id}:{revision}"
+        self._plan_product_notifications(round_, PREDICTIONS_PUBLISHED, operation_key)
         if self.repository.operation_done(operation_key):
+            self._recover_product_notifications()
             self.telegram.send_message(chat_id, "Эта публикация уже обработана.")
             return
         popularity: dict[str, int] = {}
@@ -532,6 +541,7 @@ class BotService:
             self._recovery_notice(chat_id)
             return
         self.repository.mark_operation_done(operation_key)
+        self._recover_product_notifications()
         self.telegram.send_message(chat_id, "Купоны и агрегированная статистика опубликованы.")
 
     def _result_matches(self, chat_id: int, telegram_id: str) -> None:
@@ -608,7 +618,11 @@ class BotService:
             return
         paths = build_reports(self.output_dir, round_.round_id, self.repository.latest_predictions(round_.round_id), results, self.repository.participants(), self.now())
         operation_key = f"score:{round_.round_id}:{paths['scoring'].parent.name}"
+        self._plan_product_notifications(round_, RESULTS_READY, operation_key)
         if self.repository.operation_done(operation_key):
+            if not self.repository.round_scored(round_.round_id):
+                self.repository.mark_round_scored(round_.round_id, self.now().isoformat())
+            self._recover_product_notifications()
             self.telegram.send_message(chat_id, "Этот scoring уже обработан.")
             return
         if not self._send_once(f"{operation_key}:admin-scoring", lambda: self._delivery_telegram.send_document(chat_id, str(paths["scoring"]), "scoring.csv")) or not self._send_once(f"{operation_key}:admin-board", lambda: self._delivery_telegram.send_document(chat_id, str(paths["leaderboard"]), "leaderboard.csv")):
@@ -637,6 +651,7 @@ class BotService:
                     return
         self.repository.mark_operation_done(operation_key)
         self.repository.mark_round_scored(round_.round_id, self.now().isoformat())
+        self._recover_product_notifications()
         self.telegram.send_message(chat_id, "Скоринг завершён: totals scoring.csv и leaderboard.csv сверены.")
 
     def _send_once(self, operation_key: str, send) -> bool:
@@ -653,6 +668,76 @@ class BotService:
 
     def _recovery_notice(self, chat_id: int) -> None:
         self.telegram.send_message(chat_id, "Отправка остановлена для защиты от дубля. Откройте /admin → «Восстановить отправки»: подтвердите доставку или недоставку каждого шага.")
+
+    def _plan_product_notifications(self, round_: Round, event: str, revision: str) -> bool:
+        records = tuple(
+            ProductNotification(
+                notification_key(event, round_.round_id, revision, recipient_fingerprint(participant.telegram_id)),
+                round_.round_id,
+                event,
+                revision,
+                recipient_fingerprint(participant.telegram_id),
+            )
+            for participant in self.repository.participants()
+        )
+        try:
+            self.repository.ensure_product_notifications(records)
+        except Exception:
+            # Notifications are P1 fan-out. A storage error here must not
+            # roll back an otherwise valid activation/publish/scoring action.
+            logging.getLogger(__name__).warning("product_notification outcome=plan_error")
+            return False
+        return True
+
+    def _recover_product_notifications(self) -> None:
+        """Release committed events and deliver only notifications never attempted."""
+        try:
+            records = self.repository.product_notifications()
+            for record in records:
+                if record.status == "attempting":
+                    # A process may have died after Telegram accepted the
+                    # request. Its outcome is unknowable, so never replay it.
+                    self.repository.transition_product_notification(record.notification_key, "attempting", "unknown")
+            for record in self.repository.product_notifications():
+                if record.status == "planned" and self._notification_source_committed(record):
+                    self.repository.transition_product_notification(record.notification_key, "planned", "ready")
+            recipients = {recipient_fingerprint(item.telegram_id): item for item in self.repository.participants()}
+            for record in self.repository.product_notifications():
+                if record.status != "ready":
+                    continue
+                recipient = recipients.get(record.recipient_fingerprint)
+                round_ = self.repository.get_round(record.round_id)
+                if not recipient or not round_:
+                    self.repository.transition_product_notification(record.notification_key, "ready", "failed")
+                    continue
+                if not self.repository.transition_product_notification(record.notification_key, "ready", "attempting"):
+                    continue
+                try:
+                    self._delivery_telegram.send_message(int(recipient.telegram_id), notification_text(record.event, round_))
+                except UnknownDeliveryError:
+                    self.repository.transition_product_notification(record.notification_key, "attempting", "unknown")
+                    logging.getLogger(__name__).warning("product_notification outcome=unknown")
+                except Exception:
+                    self.repository.transition_product_notification(record.notification_key, "attempting", "failed")
+                    logging.getLogger(__name__).warning("product_notification outcome=failed")
+                else:
+                    # If persistence fails after a successful send, the record
+                    # remains attempting and is converted to unknown on restart.
+                    self.repository.transition_product_notification(record.notification_key, "attempting", "done")
+        except Exception:
+            # Participant notices are best-effort with durable state; they must
+            # never roll back activation, publication, scoring or lifecycle.
+            logging.getLogger(__name__).warning("product_notification outcome=outbox_error")
+
+    def _notification_source_committed(self, record: ProductNotification) -> bool:
+        if record.event == ROUND_OPENED:
+            active = self.repository.get_active_round()
+            return bool(active and active.round_id == record.round_id and active.checksum == record.revision)
+        if record.event == PREDICTIONS_PUBLISHED:
+            return self.repository.operation_done(record.revision)
+        if record.event == RESULTS_READY:
+            return self.repository.round_scored(record.round_id)
+        return False
 
     def _restore_drafts(self) -> None:
         if not self.draft_store:

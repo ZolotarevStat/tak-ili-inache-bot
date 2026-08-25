@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from .models import BetResult, Participant, Prediction, Round
+from .models import BetResult, Participant, Prediction, ProductNotification, Round
 
 
 class Repository(ABC):
@@ -74,3 +74,12 @@ class Repository(ABC):
 
     @abstractmethod
     def resolve_operation(self, operation_key: str, delivered: bool) -> None: ...
+
+    @abstractmethod
+    def ensure_product_notifications(self, notifications: tuple[ProductNotification, ...]) -> None: ...
+
+    @abstractmethod
+    def product_notifications(self) -> tuple[ProductNotification, ...]: ...
+
+    @abstractmethod
+    def transition_product_notification(self, notification_key: str, expected_status: str, new_status: str) -> bool: ...

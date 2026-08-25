@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Iterator
 from zoneinfo import ZoneInfo
 
-from .models import Bet, BetEvent, BetResult, BetType, Fixture, Market, Participant, Prediction, Round
+from .models import Bet, BetEvent, BetResult, BetType, Fixture, Market, Participant, Prediction, ProductNotification, Round
 from .repository import Repository
 
 MOSCOW = ZoneInfo("Europe/Moscow")
@@ -190,6 +190,35 @@ class CsvRepository(Repository):
                 rows = [row for row in rows if row["operation_key"] != operation_key]
             self._write_rows("operations.csv", rows)
 
+    def ensure_product_notifications(self, notifications: tuple[ProductNotification, ...]) -> None:
+        if not notifications:
+            return
+        with self._locked():
+            rows = self._read_rows("product_notifications.csv")
+            by_key = {item["notification_key"]: item for item in rows}
+            for notification in notifications:
+                row = self._product_notification_row(notification)
+                existing = by_key.get(notification.notification_key)
+                if existing and any(existing.get(key) != row[key] for key in row if key != "status"):
+                    raise ValueError("Product notification key collision.")
+                if not existing:
+                    rows.append(row)
+                    by_key[notification.notification_key] = row
+            self._write_rows("product_notifications.csv", rows)
+
+    def product_notifications(self) -> tuple[ProductNotification, ...]:
+        return tuple(self._product_notification_from_row(item) for item in self._read_rows("product_notifications.csv"))
+
+    def transition_product_notification(self, notification_key: str, expected_status: str, new_status: str) -> bool:
+        with self._locked():
+            rows = self._read_rows("product_notifications.csv")
+            found = next((item for item in rows if item.get("notification_key") == notification_key), None)
+            if not found or found.get("status") != expected_status:
+                return False
+            found["status"] = new_status
+            self._write_rows("product_notifications.csv", rows)
+            return True
+
     @contextmanager
     def _locked(self) -> Iterator[None]:
         import fcntl
@@ -309,6 +338,24 @@ class CsvRepository(Repository):
         if self._before_replace:
             self._before_replace(name, temp_path)
         os.replace(temp_path, path)
+
+    @staticmethod
+    def _product_notification_row(notification: ProductNotification) -> dict[str, str]:
+        return {
+            "notification_key": notification.notification_key,
+            "round_id": notification.round_id,
+            "event": notification.event,
+            "revision": notification.revision,
+            "recipient_fingerprint": notification.recipient_fingerprint,
+            "status": notification.status,
+        }
+
+    @staticmethod
+    def _product_notification_from_row(row: dict[str, str]) -> ProductNotification:
+        required = ("notification_key", "round_id", "event", "revision", "recipient_fingerprint", "status")
+        if any(not row.get(key) for key in required):
+            raise ValueError("Invalid product notification row.")
+        return ProductNotification(*(row[key] for key in required))
 
     @staticmethod
     def _round_row(round_: Round) -> dict[str, str]:

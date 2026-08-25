@@ -95,3 +95,14 @@ class Participant:
     participant_id: str
     telegram_id: str
     display_name: str
+
+
+@dataclass(frozen=True)
+class ProductNotification:
+    """A pseudonymous per-recipient notification delivery record."""
+    notification_key: str
+    round_id: str
+    event: str
+    revision: str
+    recipient_fingerprint: str
+    status: str = "planned"
