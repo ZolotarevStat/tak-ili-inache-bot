@@ -6,8 +6,8 @@
 |---|---|
 | Package | `tak-ili-inache-bot` |
 | Version | `0.1.0` |
-| Release status | `GIT BASELINE PUBLISHED / VDS ACTIVE / PILOT GO WITH CONDITIONS` |
-| Open gate | close active smoke → load current real CSV → participant pilot |
+| Release status | `GIT BASELINE PUBLISHED / VDS ACTIVE / PARTICIPANT PILOT GO` |
+| Open gate | none for the participant pilot; Grafana and product notifications remain non-blocking P1 |
 | Application MVP baseline commit | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` |
 | S3/infra publication commit | `4a3540f98f6c310c7a842caaf9679218802b15a0` |
 | Release ID | `0.1.0-cjm-v1-2-close-integrity-20260825-local` |
@@ -90,7 +90,7 @@ operational status. S3 credentials were transferred directly to root-owned
 | Historical active sequential release | PASS (older candidate only) | v4 transaction activated candidate; one worker, strict health and IPv6 long-polls passed; not evidence for this local candidate |
 | Active VDS release staging / remote verification | PASS | immutable application release and active VDS digest verified |
 | Active VDS release activation | PASS | `current` is `0.1.0-cjm-v1-2-close-integrity-20260825-local`; worker and health green |
-| Participant pilot | READY WITH CONDITION | close `SMOKE-20260907`, then upload/activate the current real fixtures CSV |
+| Participant pilot | PASS / GO | `SMOKE-20260907` archived; `PILOT-20260826` active; strict data/liveness/delivery health green; one worker, `NRestarts=0`; post-activation S3 backup and freshness checks `success/0` |
 
 Tests emitted one non-blocking Python 3.14 `tarfile.extractall` deprecation warning. The verified runtime is Python 3.12.7 and archive paths are validated before extraction.
 
@@ -101,8 +101,8 @@ digest was calculated twice as
 `sha256:c68e07363c469eefa32f6f58d2ee3bfd8e00ecbad1d155294bd05bdf0bee5fa4`.
 The consolidated suite is `Ran 145 tests` / `OK`. Compile, shell syntax,
 sensitive scan, immutable remote staging, transactional activation and strict
-health passed. Participant pilot remains gated only by closing the active smoke
-round and loading the real round CSV; Grafana and product reminders are P1.
+health passed. The real round `PILOT-20260826` is active and the participant
+pilot is GO. Grafana and product reminders remain non-blocking P1.
 
 The delta is bounded to participant CJM: one correction draft cloned from the
 confirmed coupon; internal stable selection/bet identities; compatible
