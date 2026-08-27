@@ -16,8 +16,9 @@ from typing import Callable
 
 from .fixtures import import_fixtures
 from .models import Bet, BetEvent, BetResult, BetType, Fixture, Market, Prediction, Round
-from .reporting import build_popularity_chart, build_predictions_export, build_reports
+from .reporting import build_popularity_chart, build_predictions_export, build_public_coupons, build_reports
 from .presentation import compact_match_label, public_event_label
+from .scoring import score_partial_predictions
 from .repository import Repository
 from .delivery import UnknownDeliveryError
 from .telegram_api import TelegramClient, TelegramHttpError
@@ -172,7 +173,7 @@ class BotService:
             self.telegram.send_message(chat["id"], self._help() if text == "/help" else self._rules())
             return
         if chat.get("type") not in PRIVATE_TYPES:
-            if text in {"/start", "/predict", "/new", "/my", "/admin", "/status", "/publish", "/export", "/score"}:
+            if text in {"/start", "/predict", "/new", "/my", "/admin", "/status", "/publish", "/interim", "/export", "/score"}:
                 self.telegram.send_message(chat["id"], "Сбор и просмотр прогнозов доступны только в личном чате с ботом.")
             return
         telegram_id = str(user["id"])
@@ -190,6 +191,8 @@ class BotService:
             self._admin_status(chat["id"], telegram_id)
         elif text == "/publish":
             self._publish(chat["id"], telegram_id)
+        elif text == "/interim":
+            self._publish_interim(chat["id"], telegram_id)
         elif text == "/export":
             self._export_predictions(chat["id"], telegram_id)
         elif text == "/score":
@@ -325,6 +328,8 @@ class BotService:
             self._admin_status(chat_id, telegram_id)
         elif data == "admin:publish":
             self._publish(chat_id, telegram_id)
+        elif data == "admin:publish-interim":
+            self._publish_interim(chat_id, telegram_id)
         elif data == "admin:export-predictions":
             self._export_predictions(chat_id, telegram_id)
         elif data == "admin:results":
@@ -447,6 +452,9 @@ class BotService:
                     stage = "results"
                     buttons += [("Внести результаты", "admin:results")]
                     action_lines.append("🧾 Следующий шаг: внести результаты всех матчей")
+                    if predictions and result_count:
+                        buttons += [("Опубликовать промежуточный рейтинг", "admin:publish-interim")]
+                        action_lines.append("📊 Промежуточный рейтинг — одним сообщением в группе")
                 else:
                     stage = "scoring"
                     buttons += [("Скоринг", "admin:score")]
@@ -598,41 +606,117 @@ class BotService:
         if self.tournament_chat_id is None:
             self.telegram.send_message(chat_id, "TOURNAMENT_CHAT_ID не настроен.")
             return
+        if any(key.startswith(("publish-v2:", "publish-v3:")) for key in self.repository.pending_operations()):
+            self._recovery_notice(chat_id)
+            return
         predictions = self.repository.latest_predictions(round_.round_id)
+        if not predictions:
+            self.telegram.send_message(chat_id, "Нет подтверждённых прогнозов для публикации.")
+            return
         names = {item.participant_id: item.display_name for item in self.repository.participants()}
         try:
             chart_path, popularity_rows = build_popularity_chart(self.output_dir, round_, predictions)
+            coupons_path = build_public_coupons(self.output_dir, round_, predictions, self.repository.participants())
         except Exception as error:
-            logging.getLogger(__name__).exception("publish_chart_failed round_id=%s", round_.round_id)
-            self.telegram.send_message(chat_id, f"Публикация не начата: не удалось собрать инфографику ({type(error).__name__}).")
+            logging.getLogger(__name__).exception("publish_bundle_failed round_id=%s", round_.round_id)
+            self.telegram.send_message(chat_id, f"Публикация не начата: не удалось собрать материалы ({type(error).__name__}).")
             return
-        revision = hashlib.sha256(repr(("v2-human-readable", round_.checksum, predictions, sorted(names.items()))).encode()).hexdigest()[:16]
-        operation_key = f"publish-v2:{round_.round_id}:{revision}"
+        revision = hashlib.sha256(repr(("v3-compact-bundle", round_.checksum, predictions, sorted(names.items()))).encode()).hexdigest()[:16]
+        operation_key = f"publish-v3:{round_.round_id}:{revision}"
         if self.repository.operation_done(operation_key):
             self.telegram.send_message(chat_id, "Эта публикация уже обработана.")
             return
-        for index, prediction in enumerate(predictions, 1):
-            lines = [f"Купон: {names.get(prediction.participant_id, prediction.participant_id)}"]
-            for bet in prediction.bets:
-                events = ", ".join(public_event_label(round_, event, include_odds=True) for event in bet.events)
-                lines.append(f"{bet.stake}: {events}")
-            if not self._send_once(f"{operation_key}:coupon:{index}", lambda text="\n".join(lines): self._delivery_telegram.send_message(self.tournament_chat_id, text)):
-                self._recovery_notice(chat_id)
-                return
-        top = popularity_rows[:10]
-        stats = ["Топ-10 самых популярных событий:"]
-        stats += [f"{index}. {item['label']} — {item['count']}" for index, item in enumerate(top, 1)]
-        if not top:
-            stats.append("Нет подтверждённых прогнозов.")
-        stats.append("Полная статистика — на инфографике ниже.")
-        if not self._send_once(f"{operation_key}:stats", lambda text="\n".join(stats): self._delivery_telegram.send_message(self.tournament_chat_id, text)):
+        stats_caption = _top_stats_caption(round_.round_id, popularity_rows)
+        if not self._send_once(
+            f"{operation_key}:coupons-file",
+            lambda: self._delivery_telegram.send_document(
+                self.tournament_chat_id,
+                str(coupons_path),
+                f"Прогнозы тура {round_.round_id}: {len(predictions)} участников. Все купоны — в одном файле.",
+            ),
+        ):
             self._recovery_notice(chat_id)
             return
-        if not self._send_once(f"{operation_key}:stats-chart", lambda: self._delivery_telegram.send_photo(self.tournament_chat_id, str(chart_path), "Полная статистика выбора событий")):
+        if not self._send_once(
+            f"{operation_key}:stats-chart",
+            lambda: self._delivery_telegram.send_photo(self.tournament_chat_id, str(chart_path), stats_caption),
+        ):
             self._recovery_notice(chat_id)
             return
         self.repository.mark_operation_done(operation_key)
-        self.telegram.send_message(chat_id, "Купоны, топ-10 событий и полная PNG-инфографика опубликованы.")
+        self.telegram.send_message(chat_id, "Опубликовано двумя сообщениями: общий файл купонов и инфографика с топ-10.")
+
+    def _publish_interim(self, chat_id: int, telegram_id: str) -> None:
+        if not self._is_admin(telegram_id):
+            self.telegram.send_message(chat_id, "Недостаточно прав.")
+            return
+        round_ = self.repository.get_active_round()
+        if not round_ or self.now() < round_.deadline_msk:
+            self.telegram.send_message(chat_id, "Промежуточный рейтинг доступен только после дедлайна.")
+            return
+        if self.tournament_chat_id is None:
+            self.telegram.send_message(chat_id, "TOURNAMENT_CHAT_ID не настроен.")
+            return
+        if any(key.startswith(("interim-v1:", "interim-v2:")) for key in self.repository.pending_operations()):
+            self._recovery_notice(chat_id)
+            return
+        predictions = self.repository.latest_predictions(round_.round_id)
+        results = self.repository.results(round_.round_id)
+        if not predictions:
+            self.telegram.send_message(chat_id, "Нет подтверждённых прогнозов для расчёта.")
+            return
+        if not results:
+            self.telegram.send_message(chat_id, "Сначала внесите результат хотя бы одного матча.")
+            return
+        if len(results) >= len(round_.fixtures):
+            self.telegram.send_message(chat_id, "Все результаты внесены — используйте финальный скоринг.")
+            return
+        leaderboard = score_partial_predictions(list(predictions), list(results))
+        names = {item.participant_id: item.display_name for item in self.repository.participants()}
+        lines = [
+            "📊 Предварительный рейтинг",
+            f"🏟 Тур: {round_.round_id}",
+            f"⚽ Завершено матчей: {len(results)}/{len(round_.fixtures)}",
+            "",
+        ]
+        omitted = 0
+        footer = "⏳ Рейтинг предварительный: нерассчитанные ставки, включая экспрессы, ещё могут изменить позиции."
+        for index, item in enumerate(leaderboard):
+            name = names.get(item.participant_id, "Участник")
+            row = f"{item.rank}. {name} — начислено {item.realized_payout:,} очков · рассчитано ставок: {item.settled_bets} из 5".replace(",", " ")
+            remaining = len(leaderboard) - index - 1
+            suffix = ([f"…ещё участников: {remaining}"] if remaining else []) + ["", footer]
+            if len("\n".join(lines + [row] + suffix)) > 4000:
+                omitted = len(leaderboard) - index
+                break
+            lines.append(row)
+        if omitted:
+            lines.append(f"…ещё участников: {omitted}")
+        lines += ["", footer]
+        text = "\n".join(lines)
+        normalized_results = tuple(
+            (
+                result.match_id,
+                tuple(sorted(market.value for market in result.winning_markets)),
+                tuple(sorted(market.value for market in result.returned_markets)),
+            )
+            for result in sorted(results, key=lambda item: item.match_id)
+        )
+        revision = hashlib.sha256(
+            repr(("interim-v2", round_.checksum, predictions, normalized_results, sorted(names.items()))).encode()
+        ).hexdigest()[:16]
+        operation_key = f"interim-v2:{round_.round_id}:{revision}"
+        if self.repository.operation_done(operation_key):
+            self.telegram.send_message(chat_id, "Этот промежуточный рейтинг уже опубликован.")
+            return
+        if not self._send_once(
+            f"{operation_key}:group-message",
+            lambda: self._delivery_telegram.send_message(self.tournament_chat_id, text),
+        ):
+            self._recovery_notice(chat_id)
+            return
+        self.repository.mark_operation_done(operation_key)
+        self.telegram.send_message(chat_id, f"Промежуточный рейтинг опубликован одним сообщением ({len(results)}/{len(round_.fixtures)} матчей).")
 
     def _export_predictions(self, chat_id: int, telegram_id: str) -> None:
         if not self._is_admin(telegram_id):
@@ -2320,3 +2404,27 @@ def _chunks(lines: list[str], limit: int) -> list[list[str]]:
     if current:
         chunks.append(current)
     return chunks
+
+
+def _top_stats_caption(round_id: str, rows: list[dict], limit: int = 1000) -> str:
+    """Keep the publication caption below Telegram's 1024-character limit."""
+    header = f"📊 Топ-10 событий тура {round_id}"
+    footer = "Полная статистика — на инфографике."
+    if not rows:
+        return f"{header}\nНет подтверждённых прогнозов.\n{footer}"
+    lines = [header]
+    top = rows[:10]
+    for index, item in enumerate(top, 1):
+        label = str(item["label"])
+        if len(label) > 160:
+            label = label[:159].rstrip() + "…"
+        row = f"{index}. {label} — {item['count']}"
+        remaining = len(top) - index
+        suffix = ([f"…ещё событий в топ-10: {remaining}"] if remaining else []) + [footer]
+        if len("\n".join(lines + [row] + suffix)) > limit:
+            if remaining + 1:
+                lines.append(f"…ещё событий в топ-10: {remaining + 1}")
+            break
+        lines.append(row)
+    lines.append(footer)
+    return "\n".join(lines)

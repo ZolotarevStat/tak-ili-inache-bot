@@ -91,6 +91,15 @@ class LeaderboardEntry:
 
 
 @dataclass(frozen=True)
+class PartialLeaderboardEntry:
+    rank: int
+    participant_id: str
+    realized_payout: int
+    settled_bets: int
+    pending_bets: int
+
+
+@dataclass(frozen=True)
 class Participant:
     participant_id: str
     telegram_id: str

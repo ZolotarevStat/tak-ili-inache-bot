@@ -19,6 +19,39 @@ from .scoring import score_predictions
 BET_TYPE_LABELS = {"single": "Ординары", "express": "Экспрессы"}
 
 
+def build_public_coupons(
+    output_dir: str | Path,
+    round_: Round,
+    predictions: tuple[Prediction, ...],
+    participants: tuple[Participant, ...],
+) -> Path:
+    """Build one human-readable public file without internal identifiers."""
+    names = {item.participant_id: item.display_name for item in participants}
+    blocks = [f"Прогнозы тура {round_.round_id}", f"Участников: {len(predictions)}"]
+    ordered = sorted(predictions, key=lambda item: (names.get(item.participant_id, ""), item.participant_id))
+    for prediction in ordered:
+        lines = [f"Купон: {names.get(prediction.participant_id, 'Участник')}"]
+        for bet_no, bet in enumerate(prediction.bets, 1):
+            bet_type = "Ординар" if bet.bet_type.value == "single" else "Экспресс"
+            lines.append(f"{bet_no}. {bet_type} · {bet.stake}")
+            lines.extend(f"   {public_event_label(round_, event, include_odds=True)}" for event in bet.events)
+        blocks.append("\n".join(lines))
+    content = "\n\n".join(blocks) + "\n"
+    revision = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+    directory = Path(output_dir) / "publication" / "bundles" / revision
+    directory.mkdir(parents=True, exist_ok=True)
+    safe_round_id = "".join(character if character.isalnum() or character in "-_" else "_" for character in round_.round_id)[:48] or "round"
+    path = directory / f"coupons_{safe_round_id}.txt"
+    if not path.exists():
+        with tempfile.NamedTemporaryFile("w", dir=directory, encoding="utf-8", delete=False) as target:
+            temp = Path(target.name)
+            target.write(content)
+            target.flush()
+            os.fsync(target.fileno())
+        os.replace(temp, path)
+    return path
+
+
 def build_predictions_export(
     output_dir: str | Path,
     round_: Round,

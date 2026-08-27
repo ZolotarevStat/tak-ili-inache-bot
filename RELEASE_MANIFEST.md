@@ -6,16 +6,16 @@
 |---|---|
 | Package | `tak-ili-inache-bot` |
 | Version | `0.1.0` |
-| Release status | `ADMIN SCORE ENTRY P1 ACTIVE / LOCAL+REMOTE PASS` |
-| Open gate | owner live-smoke of one score and one full return |
+| Release status | `COMPACT PUBLICATION P1 ACTIVE / LOCAL+REMOTE PASS` |
+| Open gate | owner smoke: /admin button visibility and one deliberate publication |
 | Application MVP baseline commit | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` |
 | S3/infra publication commit | `4a3540f98f6c310c7a842caaf9679218802b15a0` |
 | Active application feature commit | `923ed09` on `feature/group-admin-ux-p1` |
-| Release ID | `0.1.0-score-entry-p1-20260827-local` |
-| Local verification at | `2026-08-27, admin score-entry P1, 164-test local package pass` |
+| Release ID | `0.1.0-compact-publication-p1-20260827-local` |
+| Local verification at | `2026-08-27, compact publication P1, 171-test local package pass` |
 | Python | `3.12.7` local; `3.13.5` VDS |
-| Candidate runtime digest ×2 | `sha256:4bfa82a70c818f94ad67589087b1c5f54290c273f352b60db3db8c7eca03a5bf` |
-| Active VDS release | `0.1.0-score-entry-p1-20260827-local` |
+| Candidate runtime digest ×2 | `sha256:e51cdc2efbc050237cd960b0aa8491c9c08e9993d9317ca7b0b2f1595098c50b` |
+| Active VDS release | `0.1.0-compact-publication-p1-20260827-local` |
 
 The score-entry candidate passed immutable installation, the Python 3.13.5
 suite, matching runtime digest, transactional activation, a completed long-poll,
@@ -44,6 +44,26 @@ Planning-документы, audits, tests, runtime data, venv и build products
 изменить этот digest. Он воспроизводимо рассчитан дважды с идентичным результатом.
 
 ## Verification results
+
+## Compact publication P1 — LOCAL+REMOTE PASS / ACTIVE
+
+| Field | Value |
+|---|---|
+| Release ID | `0.1.0-compact-publication-p1-20260827-local` |
+| Runtime digest ×2 | `sha256:e51cdc2efbc050237cd960b0aa8491c9c08e9993d9317ca7b0b2f1595098c50b` |
+| Scope | one public TXT with all coupons plus one top-10 PNG; one-message preliminary leaderboard after partial results; deterministic revision and Telegram-length guard |
+| Full suite | `Ran 171 tests` / `OK` |
+| Static/sensitive verification | compile, shell syntax and sensitive scan PASS |
+| External status | immutable install PASS; `Ran 171 tests` / `OK` on Python 3.13.5; digest match; activation transaction PASS; strict health green; control S3 backup PASS |
+
+Partial scoring leaves unresolved singles and still-live expresses pending. A bet
+is settled early only after a completed losing leg; returns use coefficient
+`1.00`. Equal realized payouts share a place. Intermediate publication never
+marks the round scored and is revision-idempotent across worker restarts.
+Compact `/publish` sends two group materials instead of one message per player,
+and refuses to bypass an unresolved legacy publication outbox step.
+The active round remained `PILOT-20260826`; no Telegram publication was triggered
+during deployment.
 
 ## Admin score entry P1 — LOCAL+REMOTE PASS / ACTIVE
 

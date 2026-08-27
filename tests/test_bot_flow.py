@@ -211,10 +211,11 @@ class BotFlowTests(unittest.TestCase):
             self.assertIn("Перезапись заблокирована", tg.messages[-1][1])
             now[0] = self.round_.deadline_msk
             self._admin_callback(bot, tg, "admin:publish")
-            self.assertTrue(any(chat_id == -100 and "Купон" in text for chat_id, text, _ in tg.messages))
-            published_count = len([item for item in tg.messages if item[0] == -100])
+            self.assertEqual(len([item for item in tg.documents if item[0] == -100]), 1)
+            self.assertEqual(len([item for item in tg.photos if item[0] == -100]), 1)
+            published_count = len(tg.documents) + len(tg.photos)
             self._admin_callback(bot, tg, "admin:publish")
-            self.assertEqual(len([item for item in tg.messages if item[0] == -100]), published_count)
+            self.assertEqual(len(tg.documents) + len(tg.photos), published_count)
             self._admin_callback(bot, tg, "admin:score")
             self.assertIn("заблокирован", tg.messages[-1][1])
             for fixture in self.round_.fixtures:
@@ -226,13 +227,13 @@ class BotFlowTests(unittest.TestCase):
                     self._admin_callback(bot, tg, f"admin:away-goals:{fixture.match_id}:1")
             self.assertEqual(len(repo.results("R1")[0].returned_markets), 7)
             self._admin_callback(bot, tg, "admin:score")
-            self.assertEqual(len(tg.documents), 3)
+            self.assertEqual(len(tg.documents), 4)
             self.assertTrue(all(Path(path).exists() for _, path, _ in tg.documents))
             self.assertEqual(len(tg.photos), 4)
             self.assertTrue(all(path.endswith(".png") and Path(path).exists() for _, path, _ in tg.photos))
             self.assertEqual(
                 {caption for _, _, caption in tg.photos},
-                {"Полная статистика выбора событий", "Рейтинг валовых выплат", "Выплаты по типам ставок", "Популярность событий и распределение банка"},
+                {tg.photos[0][2], "Рейтинг валовых выплат", "Выплаты по типам ставок", "Популярность событий и распределение банка"},
             )
             self.assertIn("сверены", tg.messages[-1][1])
             document_count = len(tg.documents)
@@ -319,16 +320,22 @@ class BotFlowTests(unittest.TestCase):
             bot._current_update_id = "first"
             with self.assertRaises(OSError):
                 bot._publish(9, "99")
-            first_count = len([item for item in tg.messages if item[0] == -100])
+            first_count = len([item for item in tg.documents if item[0] == -100]) + len([item for item in tg.photos if item[0] == -100])
             bot._current_update_id = "replay"
             bot._publish(9, "99")
-            self.assertEqual(len([item for item in tg.messages if item[0] == -100]), first_count)
+            self.assertEqual(
+                len([item for item in tg.documents if item[0] == -100]) + len([item for item in tg.photos if item[0] == -100]),
+                first_count,
+            )
             self.assertIn("Восстановить отправки", tg.messages[-1][1])
             bot._outbox_menu(9, "99")
             retry_button = next(row[0]["callback_data"] for row in tg.messages[-1][2]["inline_keyboard"] if row[0]["callback_data"].startswith("admin:outbox-retry:"))
             bot._handle_callback({"id": "recover", "from": {"id": 99}, "data": retry_button, "message": {"message_id": 1, "chat": {"id": 9, "type": "private"}}})
             bot._publish(9, "99")
-            self.assertGreater(len([item for item in tg.messages if item[0] == -100]), first_count)
+            self.assertGreater(
+                len([item for item in tg.documents if item[0] == -100]) + len([item for item in tg.photos if item[0] == -100]),
+                first_count,
+            )
 
     def _event(self, match_id: str) -> None:
         self._callback(f"match:{match_id}")

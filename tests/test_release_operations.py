@@ -242,7 +242,7 @@ class ReleaseOperationsTests(unittest.TestCase):
         manifest_digest = re.search(r"^\| Candidate runtime digest ×2 \| `(sha256:[0-9a-f]{64})` \|$", manifest, re.MULTILINE)
         self.assertIsNotNone(manifest_digest)
         runtime_digest = manifest_digest.group(1)
-        test_count = 164
+        test_count = 171
         self.assertNotIn("--no-build-isolation", runbook)
         for artifact in (manifest, smoke, runbook):
             self.assertIn(candidate_id, artifact)
