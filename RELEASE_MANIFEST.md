@@ -6,21 +6,20 @@
 |---|---|
 | Package | `tak-ili-inache-bot` |
 | Version | `0.1.0` |
-| Release status | `PILOT-READABILITY P1 ACTIVE / REMOTE PASS / OWNER RE-PUBLICATION PENDING` |
-| Open gate | owner CSV check → owner re-publication of human-readable coupons/top-10/PNG |
+| Release status | `ADMIN SCORE ENTRY P1 ACTIVE / LOCAL+REMOTE PASS` |
+| Open gate | owner live-smoke of one score and one full return |
 | Application MVP baseline commit | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` |
 | S3/infra publication commit | `4a3540f98f6c310c7a842caaf9679218802b15a0` |
-| Active application feature commit | `3df890d` on `feature/group-admin-ux-p1` |
-| Release ID | `0.1.0-pilot-readability-p1-r1-20260827-local` |
-| Local verification at | `2026-08-27, pilot-readability P1, 158-test local package pass` |
+| Active application feature commit | predecessor `cd71027` on `feature/group-admin-ux-p1` |
+| Release ID | `0.1.0-score-entry-p1-20260827-local` |
+| Local verification at | `2026-08-27, admin score-entry P1, 164-test local package pass` |
 | Python | `3.12.7` local; `3.13.5` VDS |
-| Candidate runtime digest ×2 | `sha256:900808db5e3677202bd2528c374bdcf2a549d9afdef025a4006007b58b17b461` |
-| Active VDS release | `0.1.0-pilot-readability-p1-r1-20260827-local` |
+| Candidate runtime digest ×2 | `sha256:4bfa82a70c818f94ad67589087b1c5f54290c273f352b60db3db8c7eca03a5bf` |
+| Active VDS release | `0.1.0-score-entry-p1-20260827-local` |
 
-The r1 candidate passed immutable remote installation, Python 3.13.5 suite,
-matching runtime digest and transactional activation. Post-start strict health
-is green; active `PILOT-20260826` and its data were preserved. A control
-encrypted S3 backup passed after activation.
+The score-entry candidate passed immutable installation, the Python 3.13.5
+suite, matching runtime digest, transactional activation, a completed long-poll,
+strict health and a control encrypted S3 backup. Active round data was preserved.
 
 ## Historical VDS deployment gate — predates current local candidate
 
@@ -45,6 +44,21 @@ Planning-документы, audits, tests, runtime data, venv и build products
 изменить этот digest. Он воспроизводимо рассчитан дважды с идентичным результатом.
 
 ## Verification results
+
+## Admin score entry P1 — LOCAL+REMOTE PASS / ACTIVE
+
+| Field | Value |
+|---|---|
+| Release ID | `0.1.0-score-entry-p1-20260827-local` |
+| Runtime digest ×2 | `sha256:4bfa82a70c818f94ad67589087b1c5f54290c273f352b60db3db8c7eca03a5bf` |
+| Scope | score buttons `0…5+` for both teams; automatic canonical markets; full-match return; one editable admin card without intermediate Telegram messages |
+| Full suite | `Ran 164 tests` / `OK` |
+| External status | immutable install PASS; `Ran 164 tests` / `OK` on Python 3.13.5; digest match; activation transaction PASS; strict health green after first long-poll; control S3 backup PASS |
+
+The result is persisted immediately after the second score choice. `5+ — 5+`
+asks only for P1/X/P2 because the exact outcome is otherwise ambiguous; a 2.5
+total is still derived. Legacy manual-market callbacks reopen the new form and
+cannot persist an incompatible result.
 
 ## Pilot readability P1 — LOCAL PASS / REMOTE PASS / ACTIVE
 

@@ -15,7 +15,7 @@ from itertools import permutations
 from typing import Callable
 
 from .fixtures import import_fixtures
-from .models import Bet, BetEvent, BetResult, BetType, Market, Prediction, Round
+from .models import Bet, BetEvent, BetResult, BetType, Fixture, Market, Prediction, Round
 from .reporting import build_popularity_chart, build_predictions_export, build_reports
 from .presentation import compact_match_label, public_event_label
 from .repository import Repository
@@ -23,6 +23,7 @@ from .delivery import UnknownDeliveryError
 from .telegram_api import TelegramClient, TelegramHttpError
 from .transport import PreSendFailure
 from .draft_store import DraftStore
+from .result_settlement import GoalChoice, settle_score
 from .validators import BANK, MAX_STAKE, MIN_STAKE, STAKE_STEP, ValidationError, validate_prediction
 
 PRIVATE_TYPES = {"private"}
@@ -98,6 +99,12 @@ class Draft:
     stake_edit_index: int = 0
 
 
+@dataclass
+class ResultScoreDraft:
+    home: GoalChoice | None = None
+    away: GoalChoice | None = None
+
+
 class BotService:
     def __init__(self, repository: Repository, telegram: TelegramClient, now: Callable[[], datetime], admin_ids: set[str] | None = None, tournament_chat_id: int | None = None, output_dir: str | Path = "output", draft_store: DraftStore | None = None) -> None:
         self.repository, self._delivery_telegram, self.now = repository, telegram, now
@@ -109,7 +116,7 @@ class BotService:
         # round revision and a short one-shot token.  They are not Telegram
         # identifiers and are never persisted or shown in copy.
         self.pending_closures: dict[str, tuple[str, str, str]] = {}
-        self.result_drafts: dict[tuple[str, str], tuple[set[Market], set[Market]]] = {}
+        self.result_drafts: dict[tuple[str, str], ResultScoreDraft] = {}
         self._pending_outbox_tokens: dict[tuple[str, str], str] = {}
         self.draft_store = draft_store
         self._restore_drafts()
@@ -216,10 +223,12 @@ class BotService:
             if self.draft_store and _is_draft_action(data):
                 self.telegram.stale_callback(query["id"])
                 return
-            # Legacy/admin controls are intentionally one-shot UI. Draft controls
-            # use the durable revision contract above and are edited in-place.
+            inplace_admin = _is_inplace_admin_action(data)
             self.telegram.answer_callback(query["id"])
-            self.telegram.clear_keyboard(chat_id, message["message_id"])
+            if not inplace_admin:
+                # Draft controls use their durable revision contract.  The
+                # result-entry admin flow owns one editable card instead.
+                self.telegram.clear_keyboard(chat_id, message["message_id"])
         if data == "menu:new":
             self._begin_prediction(chat_id, telegram_id)
         elif data == "resume":
@@ -266,7 +275,7 @@ class BotService:
         elif data == "admin:menu":
             self.pending_imports.pop(telegram_id, None)
             self.result_drafts = {key: value for key, value in self.result_drafts.items() if key[0] != telegram_id}
-            self._admin_menu(chat_id, telegram_id)
+            self._admin_menu(chat_id, telegram_id, message.get("message_id"))
         elif data == "admin:csv-format":
             self._csv_format(chat_id, telegram_id)
         elif data == "back":
@@ -319,7 +328,7 @@ class BotService:
         elif data == "admin:export-predictions":
             self._export_predictions(chat_id, telegram_id)
         elif data == "admin:results":
-            self._result_matches(chat_id, telegram_id)
+            self._result_matches(chat_id, telegram_id, message.get("message_id"))
         elif data == "admin:score":
             self._score(chat_id, telegram_id)
         elif data == "admin:outbox":
@@ -337,17 +346,26 @@ class BotService:
         elif data.startswith("admin:close-confirm:"):
             self._confirm_close(chat_id, telegram_id, data.rsplit(":", 1)[-1])
         elif data.startswith("admin:result:"):
-            self._result_editor(chat_id, telegram_id, data.rsplit(":", 1)[-1])
+            self._result_editor(chat_id, telegram_id, data.rsplit(":", 1)[-1], message.get("message_id"))
+        elif data.startswith("admin:home-goals:"):
+            _, _, match_id, token = data.split(":", 3)
+            self._select_home_goals(chat_id, telegram_id, match_id, token, message.get("message_id"))
+        elif data.startswith("admin:away-goals:"):
+            _, _, match_id, token = data.split(":", 3)
+            self._select_away_goals(chat_id, telegram_id, match_id, token, message.get("message_id"))
+        elif data.startswith("admin:score-outcome:"):
+            _, _, match_id, market = data.split(":", 3)
+            self._select_score_outcome(chat_id, telegram_id, match_id, Market(market), message.get("message_id"))
         elif data.startswith("admin:toggle:"):
-            _, _, match_id, market = data.split(":", 3)
-            self._toggle_result(chat_id, telegram_id, match_id, Market(market))
+            match_id = data.split(":", 3)[2]
+            self._result_editor(chat_id, telegram_id, match_id, message.get("message_id"), "Форма обновлена: теперь достаточно указать счёт.")
         elif data.startswith("admin:return:"):
-            self._return_match(chat_id, telegram_id, data.rsplit(":", 1)[-1])
+            self._return_match(chat_id, telegram_id, data.rsplit(":", 1)[-1], message.get("message_id"))
         elif data.startswith("admin:return-market:"):
-            _, _, match_id, market = data.split(":", 3)
-            self._toggle_return(chat_id, telegram_id, match_id, Market(market))
+            match_id = data.split(":", 3)[2]
+            self._result_editor(chat_id, telegram_id, match_id, message.get("message_id"), "Частичный возврат убран из формы: укажите счёт или возврат всего матча.")
         elif data.startswith("admin:save-result:"):
-            self._save_result(chat_id, telegram_id, data.rsplit(":", 1)[-1])
+            self._result_editor(chat_id, telegram_id, data.rsplit(":", 1)[-1], message.get("message_id"), "Форма обновлена: результат сохранится сразу после выбора счёта.")
 
     def _handle_document(self, message: dict) -> None:
         chat, telegram_id = message["chat"], str(message["from"]["id"])
@@ -390,7 +408,7 @@ class BotService:
     def _is_admin(self, telegram_id: str) -> bool:
         return telegram_id in self.admin_ids
 
-    def _admin_menu(self, chat_id: int, telegram_id: str) -> None:
+    def _admin_menu(self, chat_id: int, telegram_id: str, message_id: int | None = None) -> None:
         if not self._is_admin(telegram_id):
             self.telegram.send_message(chat_id, "Команда доступна только администратору.")
             return
@@ -438,7 +456,7 @@ class BotService:
             stage = "архивирован / нет активного"
         confirmed = len(self.repository.latest_predictions(round_.round_id)) if round_ else 0
         deadline = f"{round_.deadline_msk:%d.%m %H:%M} МСК" if round_ else "—"
-        self.telegram.send_message(chat_id, "🛠️ Админские команды\n" + "\n".join(action_lines) + f"\n\n🏟️ Текущий тур: {round_.round_id if round_ else 'нет (последний архивирован)'}\n📍 Этап: {stage}\n⏰ Дедлайн: {deadline}\n⚽ Матчей: {len(round_.fixtures) if round_ else 0}\n📝 Подтверждено прогнозов: {confirmed}\n📊 Результаты: {result_count}/{len(round_.fixtures) if round_ else 0}\n\nВыберите доступное действие:", _keyboard(buttons))
+        self._admin_card(chat_id, message_id, "🛠️ Админские команды\n" + "\n".join(action_lines) + f"\n\n🏟️ Текущий тур: {round_.round_id if round_ else 'нет (последний архивирован)'}\n📍 Этап: {stage}\n⏰ Дедлайн: {deadline}\n⚽ Матчей: {len(round_.fixtures) if round_ else 0}\n📝 Подтверждено прогнозов: {confirmed}\n📊 Результаты: {result_count}/{len(round_.fixtures) if round_ else 0}\n\nВыберите доступное действие:", _keyboard(buttons))
 
     def _csv_format(self, chat_id: int, telegram_id: str) -> None:
         if not self._is_admin(telegram_id):
@@ -640,7 +658,29 @@ class BotService:
             _keyboard([("Назад в админ-меню", "admin:menu")]),
         )
 
-    def _result_matches(self, chat_id: int, telegram_id: str) -> None:
+    def _admin_card(self, chat_id: int, message_id: int | None, text: str, reply_markup: dict) -> None:
+        if message_id is None:
+            self._delivery_telegram.send_message(chat_id, text, reply_markup)
+            return
+        try:
+            self._delivery_telegram.edit_message(chat_id, message_id, text, reply_markup)
+        except TelegramHttpError as error:
+            if error.kind != "message_not_modified":
+                raise
+        except UnknownDeliveryError:
+            # An edit may already have reached Telegram.  A send fallback would
+            # recreate precisely the duplicate admin cards this flow prevents.
+            logging.getLogger(__name__).warning("telegram_admin_card_edit_unknown no_fallback=true")
+            raise
+
+    def _result_fixture(self, telegram_id: str, match_id: str) -> tuple[Round | None, Fixture | None]:
+        if not self._is_admin(telegram_id):
+            return None, None
+        round_ = self.repository.get_active_round()
+        fixture = next((item for item in round_.fixtures if item.match_id == match_id), None) if round_ else None
+        return round_, fixture
+
+    def _result_matches(self, chat_id: int, telegram_id: str, message_id: int | None = None, notice: str = "") -> None:
         if not self._is_admin(telegram_id):
             self.telegram.send_message(chat_id, "Недостаточно прав.")
             return
@@ -651,54 +691,89 @@ class BotService:
         saved = {item.match_id for item in self.repository.results(round_.round_id)}
         buttons = [(f"{'✓ ' if item.match_id in saved else ''}{item.home_team} — {item.away_team}", f"admin:result:{item.match_id}") for item in round_.fixtures]
         buttons.append(("Назад в админ-меню", "admin:menu"))
-        self.telegram.send_message(chat_id, "Выберите матч для результата:", _keyboard(buttons))
+        prefix = f"{notice}\n\n" if notice else ""
+        self._admin_card(chat_id, message_id, prefix + f"🧾 Результаты тура {round_.round_id}\n✓ Внесено: {len(saved)}/{len(round_.fixtures)}\n\nВыберите матч:", _keyboard(buttons))
 
-    def _result_editor(self, chat_id: int, telegram_id: str, match_id: str) -> None:
-        if not self._is_admin(telegram_id):
+    def _result_editor(self, chat_id: int, telegram_id: str, match_id: str, message_id: int | None = None, notice: str = "") -> None:
+        round_, fixture = self._result_fixture(telegram_id, match_id)
+        if not round_ or not fixture:
+            self._admin_card(chat_id, message_id, "Матч не относится к активному туру.", _keyboard([("К матчам", "admin:results")]))
             return
-        winners, returns = self.result_drafts.get((telegram_id, match_id), (set(), set()))
-        buttons = [(f"{'✓ ' if market in winners else ''}{market.value}", f"admin:toggle:{match_id}:{market.value}") for market in Market]
-        buttons += [(f"{'↩ ' if market in returns else ''}Возврат {market.value}", f"admin:return-market:{match_id}:{market.value}") for market in Market]
-        buttons += [("Возврат всех рынков", f"admin:return:{match_id}"), ("Сохранить результат", f"admin:save-result:{match_id}"), ("Назад к матчам", "admin:results")]
-        self.telegram.send_message(chat_id, f"{match_id}: выберите зашедшие рынки. Выбрано: {', '.join(item.value for item in winners) or '—'}; возврат: {', '.join(item.value for item in returns) or '—'}. Для исхода сохраните канонический набор: П1+1Х, Х+1Х+Х2 или П2+Х2; выберите ровно один ТБ/ТМ. Возврат отдельного рынка — кнопка «Возврат …».", _keyboard(buttons))
+        self.result_drafts[(telegram_id, match_id)] = ResultScoreDraft()
+        text = f"⚽ {fixture.home_team} — {fixture.away_team}\n\nГолы: {fixture.home_team}\nВыберите количество:"
+        if notice:
+            text = f"{notice}\n\n{text}"
+        self._admin_card(chat_id, message_id, text, _goal_keyboard("admin:home-goals", match_id))
 
-    def _toggle_result(self, chat_id: int, telegram_id: str, match_id: str, market: Market) -> None:
-        winners, returns = self.result_drafts.setdefault((telegram_id, match_id), (set(), set()))
-        if market in winners:
-            winners.remove(market)
-        else:
-            winners.add(market)
-        self._result_editor(chat_id, telegram_id, match_id)
-
-    def _return_match(self, chat_id: int, telegram_id: str, match_id: str) -> None:
-        self.result_drafts[(telegram_id, match_id)] = (set(), set(Market))
-        self._result_editor(chat_id, telegram_id, match_id)
-
-    def _toggle_return(self, chat_id: int, telegram_id: str, match_id: str, market: Market) -> None:
-        winners, returns = self.result_drafts.setdefault((telegram_id, match_id), (set(), set()))
-        if market in returns:
-            returns.remove(market)
-        else:
-            returns.add(market)
-        self._result_editor(chat_id, telegram_id, match_id)
-
-    def _save_result(self, chat_id: int, telegram_id: str, match_id: str) -> None:
-        if not self._is_admin(telegram_id):
+    def _select_home_goals(self, chat_id: int, telegram_id: str, match_id: str, token: str, message_id: int | None) -> None:
+        round_, fixture = self._result_fixture(telegram_id, match_id)
+        if not round_ or not fixture:
+            self._result_matches(chat_id, telegram_id, message_id, "Матч больше не относится к активному туру.")
             return
-        round_ = self.repository.get_active_round()
-        if not round_ or match_id not in {item.match_id for item in round_.fixtures}:
-            self.telegram.send_message(chat_id, "Матч не относится к активному туру.")
-            return
-        winners, returns = self.result_drafts.get((telegram_id, match_id), (set(), set()))
         try:
-            from .validators import ensure_results_compatible
-            ensure_results_compatible(winners, returns)
-        except ValidationError as error:
-            self.telegram.send_message(chat_id, f"Результат не сохранён: {error}")
+            choice = GoalChoice.from_token(token)
+        except ValueError:
+            self._result_editor(chat_id, telegram_id, match_id, message_id, "Некорректное значение. Выберите счёт кнопкой.")
             return
-        self.repository.save_result(BetResult(match_id, frozenset(winners), frozenset(returns)), round_.round_id)
+        self.result_drafts[(telegram_id, match_id)] = ResultScoreDraft(home=choice)
+        text = f"⚽ {fixture.home_team} — {fixture.away_team}\n\nСчёт: {fixture.home_team} {choice.label} — ? {fixture.away_team}\nГолы: {fixture.away_team}\nВыберите количество:"
+        self._admin_card(chat_id, message_id, text, _goal_keyboard("admin:away-goals", match_id))
+
+    def _select_away_goals(self, chat_id: int, telegram_id: str, match_id: str, token: str, message_id: int | None) -> None:
+        round_, fixture = self._result_fixture(telegram_id, match_id)
+        draft = self.result_drafts.get((telegram_id, match_id))
+        if not round_ or not fixture or not draft or draft.home is None:
+            self._result_editor(chat_id, telegram_id, match_id, message_id, "Экран устарел. Укажите счёт заново.")
+            return
+        try:
+            away = GoalChoice.from_token(token)
+        except ValueError:
+            self._result_editor(chat_id, telegram_id, match_id, message_id, "Некорректное значение. Укажите счёт заново.")
+            return
+        draft.away = away
+        if draft.home.is_five_plus and away.is_five_plus:
+            rows = [[
+                {"text": "П1", "callback_data": f"admin:score-outcome:{match_id}:{Market.P1.value}"},
+                {"text": "Х", "callback_data": f"admin:score-outcome:{match_id}:{Market.X.value}"},
+                {"text": "П2", "callback_data": f"admin:score-outcome:{match_id}:{Market.P2.value}"},
+            ], [
+                {"text": "↩️ Возврат матча", "callback_data": f"admin:return:{match_id}"},
+                {"text": "← К матчам", "callback_data": "admin:results"},
+            ]]
+            self._admin_card(chat_id, message_id, f"⚽ {fixture.home_team} — {fixture.away_team}\n\nСчёт: 5+ — 5+\nУкажите исход матча:", {"inline_keyboard": rows})
+            return
+        self._persist_score_result(chat_id, telegram_id, fixture, draft, message_id)
+
+    def _select_score_outcome(self, chat_id: int, telegram_id: str, match_id: str, outcome: Market, message_id: int | None) -> None:
+        round_, fixture = self._result_fixture(telegram_id, match_id)
+        draft = self.result_drafts.get((telegram_id, match_id))
+        if not round_ or not fixture or not draft or not draft.home or not draft.away:
+            self._result_editor(chat_id, telegram_id, match_id, message_id, "Экран устарел. Укажите счёт заново.")
+            return
+        self._persist_score_result(chat_id, telegram_id, fixture, draft, message_id, outcome)
+
+    def _persist_score_result(self, chat_id: int, telegram_id: str, fixture: Fixture, draft: ResultScoreDraft, message_id: int | None, outcome: Market | None = None) -> None:
+        if draft.home is None or draft.away is None:
+            self._result_editor(chat_id, telegram_id, fixture.match_id, message_id, "Экран устарел. Укажите счёт заново.")
+            return
+        try:
+            result = settle_score(fixture, draft.home, draft.away, outcome)
+        except ValueError:
+            self._result_editor(chat_id, telegram_id, fixture.match_id, message_id, "Для этой линии счёт 5+ неоднозначен. Выберите точный счёт до 4 или возврат матча.")
+            return
+        self.repository.save_result(result, fixture.round_id)
+        score = f"{draft.home.label}:{draft.away.label}"
+        self.result_drafts.pop((telegram_id, fixture.match_id), None)
+        self._result_matches(chat_id, telegram_id, message_id, f"✅ {fixture.home_team} — {fixture.away_team}: {score}")
+
+    def _return_match(self, chat_id: int, telegram_id: str, match_id: str, message_id: int | None = None) -> None:
+        round_, fixture = self._result_fixture(telegram_id, match_id)
+        if not round_ or not fixture:
+            self._result_matches(chat_id, telegram_id, message_id, "Матч больше не относится к активному туру.")
+            return
+        self.repository.save_result(BetResult(match_id, frozenset(), frozenset(Market)), round_.round_id)
         self.result_drafts.pop((telegram_id, match_id), None)
-        self.telegram.send_message(chat_id, f"Результат {match_id} сохранён.")
+        self._result_matches(chat_id, telegram_id, message_id, f"↩️ {fixture.home_team} — {fixture.away_team}: возврат")
 
     def _score(self, chat_id: int, telegram_id: str) -> None:
         if not self._is_admin(telegram_id):
@@ -2191,6 +2266,34 @@ def _keyboard(buttons: list[tuple[str, str]], back: bool = False, cancel: bool =
     if cancel:
         rows.append([{"text": "Отмена", "callback_data": "cancel"}])
     return {"inline_keyboard": rows}
+
+
+def _goal_keyboard(prefix: str, match_id: str) -> dict:
+    tokens = (("0", "0"), ("1", "1"), ("2", "2"), ("3", "3"), ("4", "4"), ("5+", "5p"))
+    rows = []
+    for offset in (0, 3):
+        rows.append([
+            {"text": label, "callback_data": f"{prefix}:{match_id}:{token}"}
+            for label, token in tokens[offset:offset + 3]
+        ])
+    rows.append([
+        {"text": "↩️ Возврат матча", "callback_data": f"admin:return:{match_id}"},
+        {"text": "← К матчам", "callback_data": "admin:results"},
+    ])
+    return {"inline_keyboard": rows}
+
+
+def _is_inplace_admin_action(data: str) -> bool:
+    return data == "admin:menu" or data == "admin:results" or data.startswith((
+        "admin:result:",
+        "admin:home-goals:",
+        "admin:away-goals:",
+        "admin:score-outcome:",
+        "admin:toggle:",
+        "admin:return:",
+        "admin:return-market:",
+        "admin:save-result:",
+    ))
 
 
 def _is_draft_action(data: str) -> bool:

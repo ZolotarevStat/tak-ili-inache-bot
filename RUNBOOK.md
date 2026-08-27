@@ -145,12 +145,11 @@ ssh -i ~/.ssh/<VDS_ADMIN_KEY> admin@<VDS_HOST> '
 ## 2. Local verification and release identity
 
 Текущий **active** release:
-`0.1.0-pilot-readability-p1-r1-20260827-local`; suite contract
-`Ran 158 tests` / `OK`; runtime digest ×2
-`sha256:900808db5e3677202bd2528c374bdcf2a549d9afdef025a4006007b58b17b461`.
-Для него immutable staging, remote suite, digest match, transaction, strict
-health и контрольный S3 backup выполнены. При следующем изменении используйте
-новый release ID и повторите этот gate; не изменяйте current release in-place.
+`0.1.0-score-entry-p1-20260827-local`; suite contract
+`Ran 164 tests` / `OK`; runtime digest ×2
+`sha256:4bfa82a70c818f94ad67589087b1c5f54290c273f352b60db3db8c7eca03a5bf`.
+Immutable install, remote suite/digest, transaction, strict health и
+контрольный S3 backup выполнены. Не изменяйте current release in-place.
 
 ```bash
 cd <PROJECT_DIR>
@@ -170,7 +169,7 @@ Sensitive scan must return no matches:
 Set the release ID after the digest is recorded in the deployment evidence:
 
 ```bash
-export TII_RELEASE_ID="0.1.0-pilot-readability-p1-r1-20260827-local"
+export TII_RELEASE_ID="0.1.0-score-entry-p1-20260827-local"
 export TII_VDS_HOST=<VDS_HOST>
 ```
 
@@ -191,7 +190,7 @@ rsync -az --delete \
 On the VDS, install and validate before switching `current`:
 
 ```bash
-export TII_RELEASE_ID="0.1.0-pilot-readability-p1-r1-20260827-local"
+export TII_RELEASE_ID="0.1.0-score-entry-p1-20260827-local"
 sudo install -d -o root -g root -m 0755 "/opt/tak-ili-inache/releases/${TII_RELEASE_ID}"
 sudo rsync -a --delete \
   "/srv/tak-ili-inache/incoming/${TII_RELEASE_ID}/" \

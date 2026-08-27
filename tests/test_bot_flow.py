@@ -19,8 +19,10 @@ class FakeTelegram:
         self.photos: list[tuple[int, str, str]] = []
         self.edits: list[tuple[int, int, str, dict | None]] = []
         self._message_id = 0
+        self.send_calls = 0
 
     def send_message(self, chat_id, text, reply_markup=None) -> None:
+        self.send_calls += 1
         self.messages.append((chat_id, text, reply_markup))
         self._message_id += 1
         return self._message_id
@@ -220,10 +222,8 @@ class BotFlowTests(unittest.TestCase):
                 if fixture.match_id == "M01":
                     self._admin_callback(bot, tg, f"admin:return:{fixture.match_id}")
                 else:
-                    self._admin_callback(bot, tg, f"admin:toggle:{fixture.match_id}:П1")
-                    self._admin_callback(bot, tg, f"admin:toggle:{fixture.match_id}:1Х")
-                    self._admin_callback(bot, tg, f"admin:toggle:{fixture.match_id}:ТБ")
-                self._admin_callback(bot, tg, f"admin:save-result:{fixture.match_id}")
+                    self._admin_callback(bot, tg, f"admin:home-goals:{fixture.match_id}:4")
+                    self._admin_callback(bot, tg, f"admin:away-goals:{fixture.match_id}:1")
             self.assertEqual(len(repo.results("R1")[0].returned_markets), 7)
             self._admin_callback(bot, tg, "admin:score")
             self.assertEqual(len(tg.documents), 3)
@@ -240,6 +240,45 @@ class BotFlowTests(unittest.TestCase):
             self._admin_callback(bot, tg, "admin:score")
             self.assertEqual(len(tg.documents), document_count)
             self.assertEqual(len(tg.photos), photo_count)
+
+    def test_admin_score_entry_edits_one_card_and_derives_markets(self) -> None:
+        repo, tg = FakeRepository(), FakeTelegram()
+        repo.save_round(self.round_)
+        bot = BotService(repo, tg, lambda: self.round_.deadline_msk, admin_ids={"99"})
+        bot.handle_update({"message": {"chat": {"id": 9, "type": "private"}, "from": {"id": 99}, "text": "/admin"}})
+        sent_before = tg.send_calls
+        cleared_before = len(tg.cleared)
+
+        self._admin_callback(bot, tg, "admin:results")
+        self._admin_callback(bot, tg, "admin:result:M01")
+        self._admin_callback(bot, tg, "admin:home-goals:M01:4")
+        self._admin_callback(bot, tg, "admin:away-goals:M01:1")
+
+        self.assertEqual(tg.send_calls, sent_before)
+        self.assertEqual(len(tg.cleared), cleared_before)
+        self.assertEqual(len(tg.edits), 4)
+        result = repo.results("R1")[0]
+        self.assertEqual(result.winning_markets, frozenset({__import__("tak_ili_inache.models", fromlist=["Market"]).Market.P1, __import__("tak_ili_inache.models", fromlist=["Market"]).Market.ONE_X, __import__("tak_ili_inache.models", fromlist=["Market"]).Market.TB}))
+        self.assertIn("✅", tg.edits[-1][2])
+        self.assertIn("4:1", tg.edits[-1][2])
+
+    def test_admin_five_plus_score_asks_outcome_and_full_return_is_immediate(self) -> None:
+        repo, tg = FakeRepository(), FakeTelegram()
+        repo.save_round(self.round_)
+        bot = BotService(repo, tg, lambda: self.round_.deadline_msk, admin_ids={"99"})
+        self._admin_callback(bot, tg, "admin:result:M01")
+        self._admin_callback(bot, tg, "admin:home-goals:M01:5p")
+        self._admin_callback(bot, tg, "admin:away-goals:M01:5p")
+        self.assertIn("Укажите исход", tg.edits[-1][2])
+        self._admin_callback(bot, tg, "admin:score-outcome:M01:Х")
+        result = repo.results("R1")[0]
+        market = __import__("tak_ili_inache.models", fromlist=["Market"]).Market
+        self.assertEqual(result.winning_markets, frozenset({market.X, market.ONE_X, market.X_TWO, market.TB}))
+
+        self._admin_callback(bot, tg, "admin:result:M02")
+        self._admin_callback(bot, tg, "admin:return:M02")
+        returned = next(item for item in repo.results("R1") if item.match_id == "M02")
+        self.assertEqual(returned.returned_markets, frozenset(market))
 
     def test_score_publishes_full_leaderboard_not_only_first_five(self) -> None:
         repo, tg = FakeRepository(), FakeTelegram()
