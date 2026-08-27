@@ -6,20 +6,23 @@
 |---|---|
 | Package | `tak-ili-inache-bot` |
 | Version | `0.1.0` |
-| Release status | `CSV INTERIM P1 ACTIVE / LOCAL+REMOTE PASS` |
-| Open gate | owner smoke: one deliberate interim publication and CSV inspection |
+| Release status | `REPORTING/EXCEL/PRIVACY P1 ACTIVE / PRODUCTION ACTIVATION PASS` |
+| Open gate | bounded owner reporting smoke |
 | Application MVP baseline commit | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` |
 | S3/infra publication commit | `4a3540f98f6c310c7a842caaf9679218802b15a0` |
 | Active application feature commit | `9f8c0be` on `feature/group-admin-ux-p1` |
-| Release ID | `0.1.0-csv-interim-p1-r1-20260827-local` |
-| Local verification at | `2026-08-27, CSV/interim P1, 174-test local package pass` |
+| Release ID | `0.1.0-reporting-heatmaps-excel-p1-r1-20260827-local` |
+| Local verification at | `2026-08-27, interim-v6 HTML caption, 183-test local package GO` |
 | Python | `3.12.7` local; `3.13.5` VDS |
-| Candidate runtime digest ×2 | `sha256:6b070bfa3667ba4a49629fca64b0e43108dca38eb6f5e53edb5fc338929563b1` |
-| Active VDS release | `0.1.0-csv-interim-p1-r1-20260827-local` |
+| Candidate runtime digest ×2 | `sha256:14f3b901de88ad84837046972e389c4624db6c8353336519494a14899e412efa` |
+| Active VDS release | `0.1.0-reporting-heatmaps-excel-p1-r1-20260827-local` |
 
-The CSV/interim candidate passed immutable installation, the Python 3.13.5
-suite, matching runtime digest, transactional activation, a completed long-poll,
-strict health and a control encrypted S3 backup. Active round data was preserved.
+The reporting/Excel/privacy r1 release completed immutable staging, remote
+Python 3.13.5 suite/digest verification, transactional activation, strict health
+and encrypted S3 backups before and after activation. The earlier staged
+`0.1.0-reporting-heatmaps-excel-p1-20260827-local` is immutable and stale after
+the interim-v6 delta; it is **not** an activation target. Active round data was
+preserved. The bounded owner reporting smoke is the remaining product check.
 
 ## Historical VDS deployment gate — predates current local candidate
 
@@ -43,9 +46,20 @@ release surface: `pyproject.toml`, `Dockerfile`, `src/tak_ili_inache/` и `deplo
 Planning-документы, audits, tests, runtime data, venv и build products не могут
 изменить этот digest. Он воспроизводимо рассчитан дважды с идентичным результатом.
 
+## Reporting heatmaps, Excel and privacy P1 — LOCAL+REMOTE PASS / ACTIVE
+
+| Field | Value |
+|---|---|
+| Release ID | `0.1.0-reporting-heatmaps-excel-p1-r1-20260827-local` |
+| Runtime digest ×2 | `sha256:14f3b901de88ad84837046972e389c4624db6c8353336519494a14899e412efa` |
+| Scope | interim-v6 HTML caption: bold only participant name, escaped dynamic HTML and bounded caption length; reporting/Excel/privacy delta remains in `bot.py` and `reporting.py` |
+| Full suite | `Ran 183 tests` / `OK`; targeted runtime GO `41/41`, P0/P1 findings 0 |
+| Local verification | compile, shell syntax, diff check and sensitive/forbidden scan PASS |
+| External status | immutable staging and Python 3.13.5 `183/183`, exact digest, transaction and strict health PASS; encrypted S3 backups before/after activation PASS; owner reporting smoke remains open |
+
 ## Verification results
 
-## CSV publication and actionable interim P1 — LOCAL+REMOTE PASS / ACTIVE
+## Prior active VDS baseline — CSV publication and actionable interim P1
 
 | Field | Value |
 |---|---|

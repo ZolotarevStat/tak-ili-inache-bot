@@ -104,6 +104,16 @@ class TelegramApiTransportTests(unittest.TestCase):
         self.assertTrue(all(request[4] is not None for request in factory.requests))
         self.assertIn(b'name="photo"', factory.requests[-1][2])
 
+    def test_document_html_parse_mode_is_opt_in_and_encoded_as_multipart_field(self):
+        api, _connector, factory = self._api([_Response(200, b'{"ok":true,"result":true}')])
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = Path(directory) / "report.csv"
+            artifact.write_bytes(b"csv")
+            api.send_document(42, str(artifact), "<b>caption</b>", parse_mode="HTML")
+        body = factory.requests[0][2]
+        self.assertIn(b'name="caption"\r\n\r\n<b>caption</b>', body)
+        self.assertIn(b'name="parse_mode"\r\n\r\nHTML', body)
+
     def test_main_replies_retry_safe_http_error_and_update_liveness(self):
         liveness = _Liveness()
         api, _connector, factory = self._api([_Response(503, b"unavailable"), _Response(200, b'{"ok":true,"result":true}')], liveness)

@@ -11,12 +11,15 @@ export TELEGRAM_BOT_TOKEN='<TEST_BOT_TOKEN>'
 PYTHONPATH=src python3 -m tak_ili_inache.polling
 ```
 
-Локальный suite перед smoke должен завершиться как `Ran 174 tests` и `OK`.
-Актуальный active release:
-`0.1.0-csv-interim-p1-r1-20260827-local`, runtime digest ×2
-`sha256:6b070bfa3667ba4a49629fca64b0e43108dca38eb6f5e53edb5fc338929563b1`.
-Immutable r1 install, remote `174/174`, digest match, transactional activation,
-strict health после первого long-poll и контрольный S3 backup прошли.
+Локальный suite перед smoke должен завершиться как `Ran 183 tests` и `OK`.
+Текущий active production release:
+`0.1.0-reporting-heatmaps-excel-p1-r1-20260827-local`, runtime digest ×2
+`sha256:14f3b901de88ad84837046972e389c4624db6c8353336519494a14899e412efa`.
+Для него immutable staging, remote suite/digest, transactional activation, strict
+health и encrypted S3 backups до/после activation прошли. Staged
+`0.1.0-reporting-heatmaps-excel-p1-20260827-local` immutable/stale и не может
+быть activation target. Bounded owner reporting smoke остаётся отдельной
+product-проверкой.
 
 ## Обязательный внешний command-first canary
 

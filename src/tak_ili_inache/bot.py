@@ -5,6 +5,7 @@ from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from contextvars import ContextVar
+import html
 import tempfile
 import hashlib
 import hmac
@@ -18,6 +19,7 @@ from .fixtures import import_fixtures
 from .models import Bet, BetEvent, BetResult, BetType, Fixture, Market, Prediction, Round
 from .reporting import (
     build_interim_results_export,
+    build_outcome_chart,
     build_popularity_chart,
     build_predictions_export,
     build_public_coupons_csv,
@@ -609,7 +611,7 @@ class BotService:
         if self.tournament_chat_id is None:
             self.telegram.send_message(chat_id, "TOURNAMENT_CHAT_ID не настроен.")
             return
-        if any(key.startswith(("publish-v2:", "publish-v3:", "publish-v4:")) for key in self.repository.pending_operations()):
+        if any(key.startswith(("publish-v2:", "publish-v3:", "publish-v4:", "publish-v5:", "publish-v6:")) for key in self.repository.pending_operations()):
             self._recovery_notice(chat_id)
             return
         predictions = self.repository.latest_predictions(round_.round_id)
@@ -624,8 +626,8 @@ class BotService:
             logging.getLogger(__name__).exception("publish_bundle_failed round_id=%s", round_.round_id)
             self.telegram.send_message(chat_id, f"Публикация не начата: не удалось собрать материалы ({type(error).__name__}).")
             return
-        revision = hashlib.sha256(repr(("v4-csv-bundle", round_.checksum, predictions, sorted(names.items()))).encode()).hexdigest()[:16]
-        operation_key = f"publish-v4:{round_.round_id}:{revision}"
+        revision = hashlib.sha256(repr(("v6-csv-bundle-selection-heatmap", round_.checksum, predictions, sorted(names.items()))).encode()).hexdigest()[:16]
+        operation_key = f"publish-v6:{round_.round_id}:{revision}"
         if self.repository.operation_done(operation_key):
             self._admin_menu(chat_id, telegram_id, message_id)
             return
@@ -660,7 +662,7 @@ class BotService:
         if self.tournament_chat_id is None:
             self.telegram.send_message(chat_id, "TOURNAMENT_CHAT_ID не настроен.")
             return
-        if any(key.startswith(("interim-v1:", "interim-v2:", "interim-v3:")) for key in self.repository.pending_operations()):
+        if any(key.startswith(("interim-v1:", "interim-v2:", "interim-v3:", "interim-v4:", "interim-v5:", "interim-v6:")) for key in self.repository.pending_operations()):
             self._recovery_notice(chat_id)
             return
         predictions = self.repository.latest_predictions(round_.round_id)
@@ -679,6 +681,7 @@ class BotService:
             interim_path, leaderboard = build_interim_results_export(
                 self.output_dir, round_, predictions, results, self.repository.participants()
             )
+            outcome_chart = build_outcome_chart(self.output_dir, round_, predictions, results)
         except Exception as error:
             logging.getLogger(__name__).exception("interim_bundle_failed round_id=%s", round_.round_id)
             self.telegram.send_message(chat_id, f"Публикация не начата: не удалось собрать CSV ({type(error).__name__}).")
@@ -693,15 +696,27 @@ class BotService:
             for result in sorted(results, key=lambda item: item.match_id)
         )
         revision = hashlib.sha256(
-            repr(("interim-v3-csv", round_.checksum, predictions, normalized_results, sorted(names.items()))).encode()
+            repr(("interim-v6-html-caption", round_.checksum, predictions, normalized_results, sorted(names.items()))).encode()
         ).hexdigest()[:16]
-        operation_key = f"interim-v3:{round_.round_id}:{revision}"
+        operation_key = f"interim-v6:{round_.round_id}:{revision}"
         if self.repository.operation_done(operation_key):
             self._admin_menu(chat_id, telegram_id, message_id)
             return
         if not self._send_once(
             f"{operation_key}:group-document",
-            lambda: self._delivery_telegram.send_document(self.tournament_chat_id, str(interim_path), caption),
+            lambda: self._delivery_telegram.send_document(
+                self.tournament_chat_id, str(interim_path), caption, parse_mode="HTML"
+            ),
+        ):
+            self._recovery_notice(chat_id)
+            return
+        if not self._send_once(
+            f"{operation_key}:outcome-chart",
+            lambda: self._delivery_telegram.send_photo(
+                self.tournament_chat_id,
+                str(outcome_chart),
+                "В ячейке — число выборов события. Зелёный — зашло, красный — не зашло, синий — возврат, серый — ожидается. Выплата экспресса начисляется только после расчёта всех его событий.",
+            ),
         ):
             self._recovery_notice(chat_id)
             return
@@ -861,8 +876,13 @@ class BotService:
         if {item.match_id for item in results} != {item.match_id for item in round_.fixtures}:
             self.telegram.send_message(chat_id, "Скоринг заблокирован: внесены результаты не для всех матчей.")
             return
-        paths = build_reports(self.output_dir, round_.round_id, self.repository.latest_predictions(round_.round_id), results, self.repository.participants(), self.now())
-        operation_key = f"score:{round_.round_id}:{paths['scoring'].parent.name}"
+        if any(key.startswith(("score:", "score-v2:", "score-v3:")) for key in self.repository.pending_operations()):
+            self._recovery_notice(chat_id)
+            return
+        predictions = self.repository.latest_predictions(round_.round_id)
+        paths = build_reports(self.output_dir, round_.round_id, predictions, results, self.repository.participants(), self.now())
+        outcome_chart = build_outcome_chart(self.output_dir, round_, predictions, results, final=True)
+        operation_key = f"score-v3:{round_.round_id}:{paths['scoring'].parent.name}"
         if self.repository.operation_done(operation_key):
             self.telegram.send_message(chat_id, "Этот scoring уже обработан.")
             return
@@ -870,26 +890,27 @@ class BotService:
             self._recovery_notice(chat_id)
             return
         if self.tournament_chat_id is not None:
-            import csv
-            with paths["leaderboard"].open(encoding="utf-8", newline="") as source:
-                rows = list(csv.DictReader(source))
-            ranking_lines = ["Рейтинг рассчитан:"] + [f"{row['rank']}. {row['display_name']} — {row['gross_payout']}" for row in rows]
-            for index, chunk in enumerate(_chunks(ranking_lines, 3500), 1):
-                if not self._send_once(f"{operation_key}:ranking:{index}", lambda text="\n".join(chunk): self._delivery_telegram.send_message(self.tournament_chat_id, text)):
-                    self._recovery_notice(chat_id)
-                    return
-            if not self._send_once(f"{operation_key}:group-board", lambda: self._delivery_telegram.send_document(self.tournament_chat_id, str(paths["leaderboard"]), "leaderboard.csv")):
+            if not self._send_once(f"{operation_key}:group-board", lambda: self._delivery_telegram.send_document(self.tournament_chat_id, str(paths["public_leaderboard"]), "final_leaderboard.csv")):
                 self._recovery_notice(chat_id)
                 return
-            chart_captions = {
-                "chart_leaderboard": "Рейтинг валовых выплат",
-                "chart_bet_types": "Выплаты по типам ставок",
-                "chart_popularity": "Популярность событий и распределение банка",
-            }
-            for key in ("chart_leaderboard", "chart_bet_types", "chart_popularity"):
-                if not self._send_once(f"{operation_key}:{key}", lambda key=key: self._delivery_telegram.send_photo(self.tournament_chat_id, str(paths[key]), chart_captions[key])):
-                    self._recovery_notice(chat_id)
-                    return
+            if not self._send_once(
+                f"{operation_key}:chart-leaderboard",
+                lambda: self._delivery_telegram.send_photo(
+                    self.tournament_chat_id, str(paths["chart_leaderboard"]), "Итоговый рейтинг валовых выплат"
+                ),
+            ):
+                self._recovery_notice(chat_id)
+                return
+            if not self._send_once(
+                f"{operation_key}:outcome-chart",
+                lambda: self._delivery_telegram.send_photo(
+                    self.tournament_chat_id,
+                    str(outcome_chart),
+                    "Цвет показывает исход отдельного события, а не всей ставки: зелёный — зашло; красный — не зашло; синий — возврат.",
+                ),
+            ):
+                self._recovery_notice(chat_id)
+                return
         self.repository.mark_operation_done(operation_key)
         self.repository.mark_round_scored(round_.round_id, self.now().isoformat())
         self.telegram.send_message(chat_id, "Скоринг завершён: totals scoring.csv и leaderboard.csv сверены.")
@@ -2430,24 +2451,17 @@ def _interim_caption(
 ) -> str:
     """Summarize an interim CSV while staying below Telegram's caption cap."""
     lines = [
-        f"📊 Промежуточные результаты · {round_id}",
-        f"Матчей: {completed}/{total}. Рейтинг — по уже начисленным очкам.",
+        f"📊 Промежуточные результаты · {_caption_text(round_id, 80)}",
+        f"Матчей: {completed}/{total}. Рейтинг предварительный: экспрессы — после расчёта всех событий.",
         "",
     ]
     footer = [
         "",
-        "Подробно по каждой ставке и событию — в CSV.",
-        "Максимум не гарантирован: он предполагает победу всех ещё живых ставок.",
+        "В скобках — итог, если зайдут все оставшиеся ставки.",
     ]
     for index, item in enumerate(leaderboard):
-        name = names.get(item.participant_id, "Участник")
-        if len(name) > 80:
-            name = name[:79].rstrip() + "…"
-        remaining_potential = item.maximum_payout - item.realized_payout
-        row = (
-            f"{item.rank}. {name} — начислено {item.realized_payout:,} · "
-            f"ещё возможно +{remaining_potential:,} · максимум {item.maximum_payout:,}"
-        ).replace(",", " ")
+        name = _caption_text(names.get(item.participant_id, "Участник"), 80)
+        row = f"{item.rank}. <b>{name}</b> — {_caption_number(item.realized_payout)} ({_caption_number(item.maximum_payout)})"
         remaining = len(leaderboard) - index - 1
         suffix = ([f"…ещё участников: {remaining}"] if remaining else []) + footer
         if len("\n".join(lines + [row] + suffix)) > limit:
@@ -2455,4 +2469,19 @@ def _interim_caption(
             break
         lines.append(row)
     result = "\n".join(lines + footer)
-    return result[:limit]
+    if len(result) > limit:
+        # All dynamic text is bounded before escaping, so reaching this branch
+        # would be a programming error—not a reason to slice a HTML tag/entity.
+        raise ValueError("interim caption exceeds Telegram limit")
+    return result
+
+
+def _caption_number(value: int) -> str:
+    return f"{int(value):,}".replace(",", ".")
+
+
+def _caption_text(value: str, limit: int) -> str:
+    """Truncate raw text first, then escape once for Telegram HTML captions."""
+    value = value.replace("\r", " ").replace("\n", " ")
+    normalized = value if len(value) <= limit else value[:limit - 1].rstrip() + "…"
+    return html.escape(normalized, quote=True)

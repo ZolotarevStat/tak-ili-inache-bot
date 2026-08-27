@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import unittest
 from datetime import timedelta
 from pathlib import Path
@@ -16,6 +17,7 @@ class FakeTelegram:
         self.answered: list[str] = []
         self.cleared: list[tuple[int, int]] = []
         self.documents: list[tuple[int, str, str]] = []
+        self.document_parse_modes: list[str | None] = []
         self.photos: list[tuple[int, str, str]] = []
         self.edits: list[tuple[int, int, str, dict | None]] = []
         self._message_id = 0
@@ -43,8 +45,9 @@ class FakeTelegram:
     def download_document(self, document):
         return document["content"]
 
-    def send_document(self, chat_id, path, caption=""):
+    def send_document(self, chat_id, path, caption="", parse_mode=None):
         self.documents.append((chat_id, path, caption))
+        self.document_parse_modes.append(parse_mode)
 
     def send_photo(self, chat_id, path, caption=""):
         self.photos.append((chat_id, path, caption))
@@ -229,11 +232,15 @@ class BotFlowTests(unittest.TestCase):
             self._admin_callback(bot, tg, "admin:score")
             self.assertEqual(len(tg.documents), 4)
             self.assertTrue(all(Path(path).exists() for _, path, _ in tg.documents))
-            self.assertEqual(len(tg.photos), 4)
+            self.assertEqual(len(tg.photos), 3)
             self.assertTrue(all(path.endswith(".png") and Path(path).exists() for _, path, _ in tg.photos))
             self.assertEqual(
                 {caption for _, _, caption in tg.photos},
-                {tg.photos[0][2], "Рейтинг валовых выплат", "Выплаты по типам ставок", "Популярность событий и распределение банка"},
+                {
+                    tg.photos[0][2],
+                    "Итоговый рейтинг валовых выплат",
+                    "Цвет показывает исход отдельного события, а не всей ставки: зелёный — зашло; красный — не зашло; синий — возврат.",
+                },
             )
             self.assertIn("сверены", tg.messages[-1][1])
             document_count = len(tg.documents)
@@ -294,9 +301,54 @@ class BotFlowTests(unittest.TestCase):
                 repo.save_result(__import__("tak_ili_inache.models", fromlist=["BetResult"]).BetResult(fixture.match_id, frozenset({__import__("tak_ili_inache.models", fromlist=["Market"]).Market.P1, __import__("tak_ili_inache.models", fromlist=["Market"]).Market.ONE_X, __import__("tak_ili_inache.models", fromlist=["Market"]).Market.TB})))
             self._admin_callback(bot, tg, "admin:score")
             self.assertIn("сверены", tg.messages[-1][1])
-            group_text = "\n".join(text for chat_id, text, _ in tg.messages if chat_id == -100)
-            for index in range(6):
-                self.assertIn(f"Игрок {index}", group_text)
+            self.assertFalse(any(chat_id == -100 for chat_id, _, _ in tg.messages))
+            self.assertEqual(len([item for item in tg.documents if item[0] == -100]), 1)
+            self.assertEqual(len([item for item in tg.photos if item[0] == -100]), 2)
+            self.assertTrue(any("Итоговый рейтинг" in item[2] for item in tg.photos))
+            self.assertTrue(any("зелёный" in item[2] for item in tg.photos))
+
+    def test_final_group_leaderboard_is_public_formula_safe_and_idempotent(self) -> None:
+        repo, tg = FakeRepository(), FakeTelegram()
+        with tempfile.TemporaryDirectory() as output:
+            bot = BotService(repo, tg, lambda: self.round_.deadline_msk, admin_ids={"99"}, tournament_chat_id=-100, output_dir=output)
+            repo.save_round(self.round_)
+            base = __import__("test_validators").valid_prediction()
+            names = ('=HYPERLINK("https://invalid")', "+cmd", "\tcmd", "Одинаковый", "Одинаковый")
+            for index, name in enumerate(names):
+                participant = repo.register_participant(str(123456 + index), name)
+                repo.save_prediction(base.__class__("R1", participant.participant_id, base.bets, base.submitted_at_msk), f"p{index}")
+            market = __import__("tak_ili_inache.models", fromlist=["Market"]).Market
+            result_type = __import__("tak_ili_inache.models", fromlist=["BetResult"]).BetResult
+            for fixture in self.round_.fixtures:
+                repo.save_result(result_type(fixture.match_id, frozenset({market.P1, market.ONE_X, market.TB})))
+
+            bot._score(9, "99")
+            group_documents = [item for item in tg.documents if item[0] == -100]
+            group_photos = [item for item in tg.photos if item[0] == -100]
+            self.assertEqual(len(group_documents), 1)
+            self.assertEqual(len(group_photos), 2)
+            path = Path(group_documents[0][1])
+            self.assertEqual(path.name, "final_leaderboard.csv")
+            raw = path.read_bytes()
+            self.assertTrue(raw.startswith(b"\xef\xbb\xbf"))
+            self.assertNotIn(b"tg:123456", raw)
+            with path.open(encoding="utf-8-sig", newline="") as source:
+                rows = list(csv.DictReader(source))
+            self.assertEqual(
+                list(rows[0]),
+                ["round_id", "player_no", "rank", "display_name", "gross_payout", "net_result", "winning_bets", "single_payout", "express_payout"],
+            )
+            self.assertFalse({"participant_id", "telegram_id", "match_id", "submitted_at"} & set(rows[0]))
+            self.assertIn("'=HYPERLINK(\"https://invalid\")", {row["display_name"] for row in rows})
+            self.assertIn("'+cmd", {row["display_name"] for row in rows})
+            self.assertIn("'\tcmd", {row["display_name"] for row in rows})
+            duplicates = [row for row in rows if row["display_name"] == "Одинаковый"]
+            self.assertEqual(len(duplicates), 2)
+            self.assertEqual(len({row["player_no"] for row in duplicates}), 2)
+
+            bot._score(9, "99")
+            self.assertEqual(len([item for item in tg.documents if item[0] == -100]), 1)
+            self.assertEqual(len([item for item in tg.photos if item[0] == -100]), 2)
 
     def test_outbox_pending_step_is_not_resent_after_persistence_failure(self) -> None:
         class FailingRepository(FakeRepository):

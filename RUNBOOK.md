@@ -144,12 +144,15 @@ ssh -i ~/.ssh/<VDS_ADMIN_KEY> admin@<VDS_HOST> '
 
 ## 2. Local verification and release identity
 
-Текущий **active** release:
-`0.1.0-csv-interim-p1-r1-20260827-local`; suite contract
-`Ran 174 tests` / `OK`; runtime digest ×2
-`sha256:6b070bfa3667ba4a49629fca64b0e43108dca38eb6f5e53edb5fc338929563b1`.
-Immutable r1 install, remote `174/174`, digest match, transaction, strict health
-и контрольный encrypted S3 backup выполнены. Не изменяйте current release in-place.
+Текущий active production release:
+`0.1.0-reporting-heatmaps-excel-p1-r1-20260827-local`; suite contract
+`Ran 183 tests` / `OK`; runtime digest ×2
+`sha256:14f3b901de88ad84837046972e389c4624db6c8353336519494a14899e412efa`.
+Immutable install, remote Python 3.13.5 suite/digest, transaction, strict health
+и encrypted S3 backups до/после activation прошли. Не изменяйте `current`
+in-place. Staged `0.1.0-reporting-heatmaps-excel-p1-20260827-local`
+immutable/stale после interim-v6 и не является activation target. Owner reporting
+smoke остаётся отдельной product-проверкой.
 
 ```bash
 cd <PROJECT_DIR>
@@ -169,7 +172,7 @@ Sensitive scan must return no matches:
 Set the release ID after the digest is recorded in the deployment evidence:
 
 ```bash
-export TII_RELEASE_ID="0.1.0-csv-interim-p1-r1-20260827-local"
+export TII_RELEASE_ID="0.1.0-reporting-heatmaps-excel-p1-r1-20260827-local"
 export TII_VDS_HOST=<VDS_HOST>
 ```
 
@@ -190,7 +193,7 @@ rsync -az --delete \
 On the VDS, install and validate before switching `current`:
 
 ```bash
-export TII_RELEASE_ID="0.1.0-csv-interim-p1-r1-20260827-local"
+export TII_RELEASE_ID="0.1.0-reporting-heatmaps-excel-p1-r1-20260827-local"
 sudo install -d -o root -g root -m 0755 "/opt/tak-ili-inache/releases/${TII_RELEASE_ID}"
 sudo rsync -a --delete \
   "/srv/tak-ili-inache/incoming/${TII_RELEASE_ID}/" \
