@@ -145,7 +145,7 @@ ssh -i ~/.ssh/<VDS_ADMIN_KEY> admin@<VDS_HOST> '
 ## 2. Local verification and release identity
 
 Текущий кандидат:
-`0.1.0-csv-interim-p1-20260827-local`; suite contract
+`0.1.0-csv-interim-p1-r1-20260827-local`; suite contract
 `Ran 174 tests` / `OK`; runtime digest ×2
 `sha256:6b070bfa3667ba4a49629fca64b0e43108dca38eb6f5e53edb5fc338929563b1`.
 До активации active VDS release остаётся
@@ -169,7 +169,7 @@ Sensitive scan must return no matches:
 Set the release ID after the digest is recorded in the deployment evidence:
 
 ```bash
-export TII_RELEASE_ID="0.1.0-csv-interim-p1-20260827-local"
+export TII_RELEASE_ID="0.1.0-csv-interim-p1-r1-20260827-local"
 export TII_VDS_HOST=<VDS_HOST>
 ```
 
@@ -190,7 +190,7 @@ rsync -az --delete \
 On the VDS, install and validate before switching `current`:
 
 ```bash
-export TII_RELEASE_ID="0.1.0-csv-interim-p1-20260827-local"
+export TII_RELEASE_ID="0.1.0-csv-interim-p1-r1-20260827-local"
 sudo install -d -o root -g root -m 0755 "/opt/tak-ili-inache/releases/${TII_RELEASE_ID}"
 sudo rsync -a --delete \
   "/srv/tak-ili-inache/incoming/${TII_RELEASE_ID}/" \

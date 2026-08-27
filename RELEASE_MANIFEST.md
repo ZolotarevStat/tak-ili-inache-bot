@@ -11,7 +11,7 @@
 | Application MVP baseline commit | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` |
 | S3/infra publication commit | `4a3540f98f6c310c7a842caaf9679218802b15a0` |
 | Active application feature commit | `local CSV/interim worktree` on `feature/group-admin-ux-p1` |
-| Release ID | `0.1.0-csv-interim-p1-20260827-local` |
+| Release ID | `0.1.0-csv-interim-p1-r1-20260827-local` |
 | Local verification at | `2026-08-27, CSV/interim P1, 174-test local package pass` |
 | Python | `3.12.7` local; `3.13.5` VDS |
 | Candidate runtime digest ×2 | `sha256:6b070bfa3667ba4a49629fca64b0e43108dca38eb6f5e53edb5fc338929563b1` |
@@ -49,7 +49,7 @@ Planning-документы, audits, tests, runtime data, venv и build products
 
 | Field | Value |
 |---|---|
-| Release ID | `0.1.0-csv-interim-p1-20260827-local` |
+| Release ID | `0.1.0-csv-interim-p1-r1-20260827-local` |
 | Runtime digest ×2 | `sha256:6b070bfa3667ba4a49629fca64b0e43108dca38eb6f5e53edb5fc338929563b1` |
 | Scope | public coupons CSV instead of TXT; one interim CSV document with event/bet statuses, realized payout and remaining ceiling; compact in-place admin card |
 | Full suite | `Ran 174 tests` / `OK` |
@@ -63,6 +63,10 @@ of pending bets and the maximum final total. A full return is labeled as a
 return. Successful admin callbacks edit the existing compact card and do not
 append success logs. Legacy and current pending publication operations remain
 fail-closed until reconciliation.
+The first immutable install ID failed its remote suite before activation because
+two new publication tests used a relative output directory under the root-owned
+release. Product runtime already uses the writable data directory. The tests now
+use isolated temporary directories; the failed ID was never activated.
 
 ## Compact publication P1 — LOCAL+REMOTE PASS / ACTIVE
 

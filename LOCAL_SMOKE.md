@@ -13,7 +13,7 @@ PYTHONPATH=src python3 -m tak_ili_inache.polling
 
 Локальный suite перед smoke должен завершиться как `Ran 174 tests` и `OK`.
 Актуальный кандидат:
-`0.1.0-csv-interim-p1-20260827-local`, runtime digest ×2
+`0.1.0-csv-interim-p1-r1-20260827-local`, runtime digest ×2
 `sha256:6b070bfa3667ba4a49629fca64b0e43108dca38eb6f5e53edb5fc338929563b1`.
 До remote activation текущим остаётся
 `0.1.0-compact-publication-p1-20260827-local`.

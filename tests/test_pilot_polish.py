@@ -123,39 +123,40 @@ class PilotPolishTests(unittest.TestCase):
         repo.save_prediction(self._prediction(first.participant_id, (Market.P1,) * 6), "p1")
         repo.save_prediction(self._prediction(second.participant_id, (Market.P2,) * 6), "p2")
         repo.save_result(BetResult("M01", frozenset({Market.P1, Market.ONE_X, Market.TB})))
-        bot = BotService(
-            repo, tg, lambda: self.round_.deadline_msk,
-            admin_ids={"99"}, tournament_chat_id=-100,
-        )
-        bot._admin_menu(9, "99")
-        labels = [button["text"] for row in tg.messages[-1][2]["inline_keyboard"] for button in row]
-        self.assertIn("Опубликовать промежуточный рейтинг", labels)
+        with tempfile.TemporaryDirectory() as output:
+            bot = BotService(
+                repo, tg, lambda: self.round_.deadline_msk,
+                admin_ids={"99"}, tournament_chat_id=-100, output_dir=output,
+            )
+            bot._admin_menu(9, "99")
+            labels = [button["text"] for row in tg.messages[-1][2]["inline_keyboard"] for button in row]
+            self.assertIn("Опубликовать промежуточный рейтинг", labels)
 
-        bot._publish_interim(9, "99")
-        group = [item for item in tg.documents if item[0] == -100]
-        self.assertEqual(len(group), 1)
-        self.assertFalse(any(chat_id == -100 for chat_id, _, _ in tg.messages))
-        self.assertIn("Матчей: 1/12", group[0][2])
-        self.assertIn("Игрок Один", group[0][2])
-        self.assertIn("Максимум не гарантирован", group[0][2])
-        self.assertLessEqual(len(group[0][2]), 1000)
-        with Path(group[0][1]).open(encoding="utf-8-sig", newline="") as source:
-            rows = list(csv.DictReader(source))
-        first_rows = [row for row in rows if row["Игрок"] == "Игрок Один"]
-        self.assertEqual(first_rows[0]["Статус события"], "зашло")
-        self.assertEqual(first_rows[0]["Статус ставки"], "зашло")
-        self.assertGreater(int(first_rows[0]["Начислено"]), 0)
-        self.assertGreater(int(first_rows[0]["Макс. выплата ожидающих"]), 0)
-        self.assertEqual(
-            int(first_rows[0]["Макс. итог"]),
-            int(first_rows[0]["Начислено"]) + int(first_rows[0]["Макс. выплата ожидающих"]),
-        )
-        bot._publish_interim(9, "99")
-        self.assertEqual(len([item for item in tg.documents if item[0] == -100]), 1)
+            bot._publish_interim(9, "99")
+            group = [item for item in tg.documents if item[0] == -100]
+            self.assertEqual(len(group), 1)
+            self.assertFalse(any(chat_id == -100 for chat_id, _, _ in tg.messages))
+            self.assertIn("Матчей: 1/12", group[0][2])
+            self.assertIn("Игрок Один", group[0][2])
+            self.assertIn("Максимум не гарантирован", group[0][2])
+            self.assertLessEqual(len(group[0][2]), 1000)
+            with Path(group[0][1]).open(encoding="utf-8-sig", newline="") as source:
+                rows = list(csv.DictReader(source))
+            first_rows = [row for row in rows if row["Игрок"] == "Игрок Один"]
+            self.assertEqual(first_rows[0]["Статус события"], "зашло")
+            self.assertEqual(first_rows[0]["Статус ставки"], "зашло")
+            self.assertGreater(int(first_rows[0]["Начислено"]), 0)
+            self.assertGreater(int(first_rows[0]["Макс. выплата ожидающих"]), 0)
+            self.assertEqual(
+                int(first_rows[0]["Макс. итог"]),
+                int(first_rows[0]["Начислено"]) + int(first_rows[0]["Макс. выплата ожидающих"]),
+            )
+            bot._publish_interim(9, "99")
+            self.assertEqual(len([item for item in tg.documents if item[0] == -100]), 1)
 
-        repo.save_result(BetResult("M02", frozenset({Market.P1, Market.ONE_X, Market.TB})))
-        bot._publish_interim(9, "99")
-        self.assertEqual(len([item for item in tg.documents if item[0] == -100]), 2)
+            repo.save_result(BetResult("M02", frozenset({Market.P1, Market.ONE_X, Market.TB})))
+            bot._publish_interim(9, "99")
+            self.assertEqual(len([item for item in tg.documents if item[0] == -100]), 2)
 
     def test_interim_caption_stays_within_telegram_document_limit(self) -> None:
         repo, tg = FakeRepository(), FakeTelegram()
@@ -164,14 +165,15 @@ class PilotPolishTests(unittest.TestCase):
             participant = repo.register_participant(str(index), f"Игрок {index} " + "ОченьДлинноеИмя" * 7)
             repo.save_prediction(self._prediction(participant.participant_id, (Market.P1,) * 6), f"p{index}")
         repo.save_result(BetResult("M01", frozenset({Market.P1, Market.ONE_X, Market.TB})))
-        bot = BotService(
-            repo, tg, lambda: self.round_.deadline_msk,
-            admin_ids={"99"}, tournament_chat_id=-100,
-        )
-        bot._publish_interim(9, "99")
-        caption = next(caption for chat_id, _, caption in tg.documents if chat_id == -100)
-        self.assertLessEqual(len(caption), 1000)
-        self.assertIn("…ещё участников:", caption)
+        with tempfile.TemporaryDirectory() as output:
+            bot = BotService(
+                repo, tg, lambda: self.round_.deadline_msk,
+                admin_ids={"99"}, tournament_chat_id=-100, output_dir=output,
+            )
+            bot._publish_interim(9, "99")
+            caption = next(caption for chat_id, _, caption in tg.documents if chat_id == -100)
+            self.assertLessEqual(len(caption), 1000)
+            self.assertIn("…ещё участников:", caption)
 
     def test_group_csv_neutralizes_formula_prefixes_and_newlines(self) -> None:
         repo, tg = FakeRepository(), FakeTelegram()
