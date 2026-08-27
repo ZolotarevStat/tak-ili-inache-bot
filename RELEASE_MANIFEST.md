@@ -6,20 +6,21 @@
 |---|---|
 | Package | `tak-ili-inache-bot` |
 | Version | `0.1.0` |
-| Release status | `GIT BASELINE PUBLISHED / VDS ACTIVE / PARTICIPANT PILOT GO` |
-| Open gate | none for the participant pilot; Grafana and product notifications remain non-blocking P1 |
+| Release status | `PILOT-READABILITY P1 ACTIVE / REMOTE PASS / OWNER RE-PUBLICATION PENDING` |
+| Open gate | owner CSV check → owner re-publication of human-readable coupons/top-10/PNG |
 | Application MVP baseline commit | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` |
 | S3/infra publication commit | `4a3540f98f6c310c7a842caaf9679218802b15a0` |
 | Active application feature commit | `3df890d` on `feature/group-admin-ux-p1` |
-| Release ID | `0.1.0-group-admin-ux-p1-r2-20260825-local` |
-| Local verification at | `2026-08-25, group/admin UX P1 + infra-v6.3.7, 147-test local and remote pass` |
+| Release ID | `0.1.0-pilot-readability-p1-r1-20260827-local` |
+| Local verification at | `2026-08-27, pilot-readability P1, 158-test local package pass` |
 | Python | `3.12.7` local; `3.13.5` VDS |
-| Active VDS runtime digest | `sha256:eb73b60883f676656e474c9b25399f6b0545c77761eee58b12a2c5821e5bbc92` |
-| Git main runtime digest ×2 | `sha256:8fe429f2c222179c0e5e2a65715a0e2ed50b0e6b6f1ec05c3dd977718434b203` |
+| Candidate runtime digest ×2 | `sha256:900808db5e3677202bd2528c374bdcf2a549d9afdef025a4006007b58b17b461` |
+| Active VDS release | `0.1.0-pilot-readability-p1-r1-20260827-local` |
 
-The active VDS runtime exactly matches the tested feature-branch candidate.
-`main` remains the prior published baseline and intentionally differs by the
-bounded group/admin UX delta until the pull request is merged.
+The r1 candidate passed immutable remote installation, Python 3.13.5 suite,
+matching runtime digest and transactional activation. Post-start strict health
+is green; active `PILOT-20260826` and its data were preserved. A control
+encrypted S3 backup passed after activation.
 
 ## Historical VDS deployment gate — predates current local candidate
 
@@ -44,6 +45,28 @@ Planning-документы, audits, tests, runtime data, venv и build products
 изменить этот digest. Он воспроизводимо рассчитан дважды с идентичным результатом.
 
 ## Verification results
+
+## Pilot readability P1 — LOCAL PASS / REMOTE PASS / ACTIVE
+
+| Field | Value |
+|---|---|
+| Release ID | `0.1.0-pilot-readability-p1-r1-20260827-local` |
+| Runtime digest ×2 | `sha256:900808db5e3677202bd2528c374bdcf2a549d9afdef025a4006007b58b17b461` |
+| Scope | human-readable published coupons; one-column compact mobile fixture list; admin long-format predictions CSV; top-10 publication plus full PNG heatmap; includes the verified draft-recovery P0 delta |
+| Full suite | `Ran 158 tests` / `OK` |
+| Static/sensitive verification | compile, shell syntax, diff check and sensitive scan PASS |
+| External status | immutable install PASS; `Ran 158 tests` / `OK` on Python 3.13.5; digest match; activation transaction PASS; strict health green; control S3 backup PASS |
+
+The candidate preserves transport, scoring rules, durable repository semantics
+and the deployment wrapper. Public coupons and the text top-10 never expose
+technical match IDs. The admin CSV intentionally excludes raw Telegram and
+participant IDs; it includes player display name, bet/event structure, full
+teams, market, odds, stake and potential payout. The PNG is a local derived
+artifact and remains excluded from S3. The first immutable install ID (without
+`r1`) failed its remote suite before activation because one test used a relative
+output directory under the root-owned release. The product path already used
+the writable data output directory. The test was moved to an isolated temp
+directory; the failed release was never activated. Only r1 became `current`.
 
 ## Group/admin UX P1 — LOCAL PASS / REMOTE PASS / ACTIVE
 

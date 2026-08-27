@@ -11,14 +11,13 @@ export TELEGRAM_BOT_TOKEN='<TEST_BOT_TOKEN>'
 PYTHONPATH=src python3 -m tak_ili_inache.polling
 ```
 
-Локальный suite перед smoke должен завершиться как `Ran 145 tests` и `OK`.
-Актуальная active release identity:
-`0.1.0-cjm-v1-2-close-integrity-20260825-local`, runtime digest ×2
-`sha256:c68e07363c469eefa32f6f58d2ee3bfd8e00ecbad1d155294bd05bdf0bee5fa4`.
-Remote staging, activation and strict health passed; this document remains the
-bounded regression workflow for every future candidate.
-Git `main` has provider-neutral comment-only deploy deltas and therefore a
-separate undeployed digest `sha256:8fe429f2c222179c0e5e2a65715a0e2ed50b0e6b6f1ec05c3dd977718434b203`.
+Локальный suite перед smoke должен завершиться как `Ran 158 tests` и `OK`.
+Актуальный **active** release:
+`0.1.0-pilot-readability-p1-r1-20260827-local`, runtime digest ×2
+`sha256:900808db5e3677202bd2528c374bdcf2a549d9afdef025a4006007b58b17b461`.
+Immutable remote install, Python 3.13.5 suite, digest match, transactional
+activation, strict health и контрольный S3 backup прошли. Owner smoke ниже
+остаётся обязательным перед закрытием публичного presentation gate.
 
 ## Обязательный внешний command-first canary
 
@@ -85,7 +84,7 @@ export TOURNAMENT_CHAT_ID='тестовый_group_chat_id'
 1. В личке выполнить `/admin`, отправить `data/fixtures_sample.csv` документом. Проверить число матчей и дедлайн в preview; нажать «Активировать новый тур».
    Перед загрузкой нажмите «Формат и пример CSV»: бот присылает валидный шаблон с обязательными колонками и примером.
 2. Пока нет прогнозов, результатов и pending-отправок, отправить исправленный CSV повторно: preview показывает кнопку «Перезаписать активный тур», а после нажатия линия заменяется. После первого сохранённого прогноза повторить попытку: перезапись должна быть заблокирована.
-3. До общего дедлайна `/status` показывает сдавших, а `/publish` отклоняется. После дедлайна `/publish` отправляет купоны и статистику в тестовую группу. Повторить `/publish` с той же content revision: новых групповых сообщений быть не должно.
+3. До общего дедлайна `/status` показывает сдавших, а `/publish` отклоняется. После дедлайна `/publish` отправляет понятные купоны без `match_id`, текстовый top-10 и один PNG с полной матрицей статистики в тестовую группу. Повторить `/publish` с той же content revision: новых групповых сообщений быть не должно.
 4. Через `/admin` → «Внести результаты» сохранить один валидный частичный результат и проверить health: состояние остаётся healthy, а «Скоринг» блокируется до полного комплекта.
 5. Для одного рынка проверить частичный возврат, для отменённого матча — «Возврат всех рынков». Попытка сохранить П1 вместе с Х, П1 с Х2 или ТБ с ТМ должна быть отклонена.
 6. После последнего результата «Скоринг» отправляет `scoring.csv` и `leaderboard.csv` в личку админа, полный рейтинг, leaderboard CSV и три PNG-графика с нормальным preview — в тестовую группу. Повторить scoring для той же content revision: дублей быть не должно.

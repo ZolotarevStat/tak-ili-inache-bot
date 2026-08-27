@@ -1,13 +1,13 @@
 # CJM участника «Так или иначе»
 
-Версия: `CJM v1.2 — partial removal contract`
-Дата: 2026-08-25
+Версия: `CJM v1.2 — partial removal + draft recovery contract`
+Дата: 2026-08-26
 Владелец решений: пользователь
 Product-decision gate: `PASS`; partial removal v1.2 прямо задан владельцем по
 результату participant evidence.
 Transport/activation/lifecycle gate: `PASS`; активен `SMOKE-20260907`.
-Participant CJM gate: `FAIL — iteration required`; production GO запрещён до
-реализации, Telegram re-smoke и аудита v1.2.
+Participant CJM gate: `LOCAL P0 RECOVERY PASS / Telegram re-smoke required`;
+production GO запрещён до Telegram evidence и аудита v1.2.
 Граница документа: продуктовый путь и тексты интерфейса. Код, сервер и
 transport-реализация вне scope этого документа.
 
@@ -46,12 +46,27 @@ transport-реализация вне scope этого документа.
 
 Это обязательные свойства платформы, а не отдельные этапы CJM:
 
-- Один активный draft представлен одной редактируемой карточкой.
+- У одного active draft ровно одна **живая** inline-клавиатура. Обычные
+  transition редактируют active card; явные `/predict` и `Продолжить черновик`
+  сначала атомарно сохраняют re-anchor intent с новой revision и
+  инвалидированным predecessor, затем создают ровно одну видимую successor card
+  внизу чата и коммитят её `active_message_id`. При restart pending intent не
+  повторяет send автоматически; predecessor callback уже stale.
 - У draft есть идентичность и текущая revision. Действие со старой revision не
   меняет состояние и показывает: `Экран устарел — открыт актуальный шаг`.
 - Повторное нажатие одной кнопки в той же revision идемпотентно.
-- `/predict` при активном draft возобновляет его на последнем сохранённом шаге,
-  а не создаёт новый draft или второй экран.
+- `/predict` при активном draft возобновляет тот же typed draft на последнем
+  сохранённом шаге через controlled re-anchor; новый domain draft не создаётся.
+  Повторный `/predict` может создать только следующую successor card, но не
+  вторую живую клавиатуру.
+- Если обычный edit вернул benign `message_not_modified`, explicit resume всё
+  равно re-anchor-ится через successor send и остаётся видимым рядом с командой.
+- Когда confirmed prediction отсутствует, но есть durable draft, `/my` говорит
+  `Есть незавершённый черновик`, показывает compact phase/progress и даёт
+  revision-bound `Продолжить черновик`. `Начать заново` сначала показывает
+  подтверждение; до confirm draft не удаляется. На `current_time ≥ deadline`
+  `/my` и все bound resume/restart actions переводят только в `L0`: revision и
+  active card не меняются, successor send запрещён.
 - Если подтверждённый прогноз уже есть, а replacement-draft ещё не начат,
   `/predict` открывает подтверждённый прогноз и предложение полной замены; новый
   draft без подтверждения замены не создаётся.
@@ -85,6 +100,11 @@ transport-реализация вне scope этого документа.
   короткой подсказкой. Telegram `400 message is not modified` для
   `editMessageText` считается benign no-op; любые другие reply errors остаются
   ошибками delivery health.
+- Для P0 recovery application telemetry пишет только при заданном
+  `TAK_ILI_INACHE_TELEMETRY_HMAC_KEY`: HMAC actor fingerprint, `update_id`,
+  action, `draft_id`, phase, revision, card transition и outcome. Raw Telegram/
+  chat IDs, тексты сообщений и secret не пишутся; без ключа per-user trace
+  fail-closed отключён.
 
 ## 4. Контракт количества кнопок
 
@@ -433,7 +453,7 @@ deadline-вариант `COPY-MY-EMPTY`.
 | `AC-31` | Игрок вернулся из `X1`/`X2` к событиям и ничего не изменил | Повторное завершение возвращает сохранённую частичную/полную сборку без потери экспрессов и сумм |
 | `AC-32` | Любая допустимая схема подтверждается | Получается ровно 5 ставок, минимум 3 ординара, минимум 1 экспресс; каждый экспресс содержит 2–3 события |
 | `AC-33` | Наступил дедлайн при active draft или replacement-draft | Draft становится read-only; кнопок продолжения/изменения нет, `/my` показывает подтверждённый прогноз либо сообщает, что подтверждённого прогноза нет |
-| `AC-34` | Тур содержит 11/12/13/14 матчей | `E1` имеет не более 2 страниц с разбиением `6+5`/`6+6`/`7+6`/`7+7`, grid 2 колонки; label хранит команды+дату, выбранность видна |
+| `AC-34` | Тур содержит 11/12/13/14 матчей | `E1` имеет не более 2 страниц с разбиением `6+5`/`6+6`/`7+6`/`7+7`; каждый матч занимает одну строку, label хранит компактные команды+дату, выбранность видна и текст не обрезается на телефоне |
 | `AC-35` | Открыт `E1` | Нижние controls одной строкой `◀️/▶️/✅/✖️`; граничные стрелки не меняют state |
 | `AC-36` | Открыт `X1` для 6–9 событий | Все события видны без pagination как команды+событие+odds; current/occupied/available различимы, occupied недоступно |
 | `AC-37` | Из `P1` нажато `Изменить суммы` | Запущены 5 последовательных шагов; старые суммы видны как quick values/подсказки; no-op нет |
@@ -462,6 +482,13 @@ deadline-вариант `COPY-MY-EMPTY`.
 | `AC-60` | В группе пришёл обычный текст, стикер или неизвестная команда | Бот молча игнорирует update; сообщения в группу не добавляются |
 | `AC-61` | В группе вызвана sensitive-команда с bare или `@bot_username` формой | Бот направляет в личку; регистрация, draft, просмотр и admin mutation не выполняются |
 | `AC-62` | Администратор открывает `/admin` до/после дедлайна | `Статус сдачи` доступен при active round; до дедлайна publish скрыт, после дедлайна видны `Опубликовать прогнозы` и ровно следующий допустимый results/scoring/close action |
+| `AC-63` | Есть durable draft, его active card давно ушла вверх; вызван `/predict` или revision-bound `Продолжить черновик` | До send сохранён intent: новая revision и predecessor invalidated; затем создана ровно одна successor card и закоммичен её ID. При crash после success-send и до commit restart не делает auto-send, predecessor callback stale, `/my` явно предлагает explicit recovery |
+| `AC-64` | `/my` без confirmed prediction / bound resume на или после дедлайна | До дедлайна при durable draft показаны `Есть незавершённый черновик`, compact phase/progress, `Продолжить черновик` и confirmation-only `Начать заново`; без draft остаётся прежний empty state. На дедлайне только `L0`, без resume/restart/re-anchor и без revision/card mutation |
+| `AC-65` | Re-anchor send получает `UnknownDeliveryError` после возможной отправки | Blind retry/второй send и commit нового active card не выполняются; durable pending intent сохраняет invalidated predecessor, error наблюдаем |
+| `AC-66` | Recovery action при telemetry HMAC key / без key | С ключом есть только HMAC actor, `update_id`, action/draft/phase/revision/card/outcome без raw IDs/text/secrets; без ключа per-user correlation не логируется |
+| `AC-67` | Администратор публикует прогнозы после дедлайна | В каждом купоне показаны полные названия команд, рынок, линия и коэффициент; internal `match_id` отсутствует |
+| `AC-68` | В туре есть подтверждённые прогнозы | `/admin` предлагает CSV-выгрузку в long format с игроком, ставкой и событием; raw Telegram/participant IDs отсутствуют |
+| `AC-69` | Администратор публикует агрегированную статистику | Текст содержит не более top-10 событий с человеческими названиями; полная матрица `матч × 7 рынков` отправлена одним читаемым PNG |
 
 ## 10. Traceability Must → state → acceptance
 
@@ -479,7 +506,7 @@ deadline-вариант `COPY-MY-EMPTY`.
 | `M-10` | `/my` показывает confirmed и даёт раздельные full replace/correction до deadline | `M1`, `R0`, `R1`, `L0`, `COPY-MY-*` | `AC-25…AC-27`, `AC-30`, `AC-33`, `AC-52…AC-58` |
 | `M-11` | Общий дедлайн — минута до первого матча; на границе изменения уже закрыты | §2, все изменяющие states, `L0` | `AC-27`, `AC-29`, `AC-33` |
 | `M-12` | Ровно 5 ставок, минимум 3 ординара и 1 экспресс, экспресс 2–3 события | §2, §6, `P1` | `AC-07…AC-10`, `AC-16`, `AC-32` |
-| `M-13` | Список 11–14 матчей: максимум 2 страницы, grid 2 колонки, команды+дата, selected state, compact controls | `E1` | `AC-34`, `AC-35`, `AC-43` |
+| `M-13` | Список 11–14 матчей: максимум 2 страницы, один матч в строке, авто-сокращение команд+дата, selected state, compact controls | `E1` | `AC-34`, `AC-35`, `AC-43` |
 | `M-14` | Все 7 исходов на одной странице; у ТБ/ТМ есть линия | `E2` | `AC-02`, `AC-41` |
 | `M-15` | Все 6–9 событий в сборке экспресса видны сразу; current/occupied/available различимы | `X1` | `AC-36` |
 | `M-16` | `B1` никогда не показывает match_id; только команды/события/сумма/остаток | `B1`, §7 | `AC-13` |
@@ -488,6 +515,8 @@ deadline-вариант `COPY-MY-EMPTY`.
 | `M-19` | Preview не дублирует банк, коэффициент и итоги; ставка и payout не теряются | `COPY-PREVIEW` | `AC-17` |
 | `M-20` | Selected матч можно убрать без пересборки всего draft; в домене удаляется его selected event | `E1`, `E2`, `W1`, §5.1 | `AC-46…AC-51` |
 | `M-21` | Correction draft клонирует confirmed и даёт три partial-edit path; full replace остаётся пустым и отдельным | `M1`, `R0`, `R1`, `E1`, `X2`, `B1`, §5.1 | `AC-40`, `AC-52…AC-58` |
+| `M-22` | Публичные купоны и статистика понятны без технических ID; текст ограничен top-10, полная статистика — PNG | publish | `AC-67`, `AC-69` |
+| `M-23` | Администратор может выгрузить все прогнозы в CSV для самостоятельной аналитики без raw Telegram ID | `A1` | `AC-68` |
 
 ## 11. Разрешённые defaults — не вопросы владельцу
 
@@ -519,4 +548,4 @@ deadline-вариант `COPY-MY-EMPTY`.
 Ни один из defaults выше не меняет бизнес-правила или допустимый путь и не
 требует отдельного решения владельца.
 
-Статус: `CJM_V1_2_SPEC_ONLY_PASS — IMPLEMENTATION_REQUIRED; PRODUCTION_NO_GO`
+Статус: `CJM_V1_2 + PILOT_READABILITY_P1 ACTIVE; OWNER PUBLICATION SMOKE PENDING`

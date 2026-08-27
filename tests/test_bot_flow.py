@@ -130,7 +130,7 @@ class BotFlowTests(unittest.TestCase):
         self._message("/help")
         self.assertIn("❓ Помощь", self.tg.messages[-1][1])
         self._message("/my")
-        self.assertIn("Прогноз ещё не подтверждён", self.tg.messages[-1][1])
+        self.assertIn("Есть незавершённый черновик", self.tg.messages[-1][1])
         self._message("/start")
         self.assertIn("Регистрация готова", self.tg.messages[-1][1])
         self.assertIsNotNone(self.bot._draft("42"))
@@ -228,11 +228,11 @@ class BotFlowTests(unittest.TestCase):
             self._admin_callback(bot, tg, "admin:score")
             self.assertEqual(len(tg.documents), 3)
             self.assertTrue(all(Path(path).exists() for _, path, _ in tg.documents))
-            self.assertEqual(len(tg.photos), 3)
+            self.assertEqual(len(tg.photos), 4)
             self.assertTrue(all(path.endswith(".png") and Path(path).exists() for _, path, _ in tg.photos))
             self.assertEqual(
                 {caption for _, _, caption in tg.photos},
-                {"Рейтинг валовых выплат", "Выплаты по типам ставок", "Популярность событий и распределение банка"},
+                {"Полная статистика выбора событий", "Рейтинг валовых выплат", "Выплаты по типам ставок", "Популярность событий и распределение банка"},
             )
             self.assertIn("сверены", tg.messages[-1][1])
             document_count = len(tg.documents)
@@ -270,25 +270,26 @@ class BotFlowTests(unittest.TestCase):
                     raise OSError("simulated disk failure after Telegram accepted send")
                 super().mark_operation_done(operation_key)
 
-        repo, tg = FailingRepository(), FakeTelegram()
-        repo.save_round(self.round_)
-        participant = repo.register_participant("42", "Игрок")
-        base = __import__("test_validators").valid_prediction()
-        repo.save_prediction(base.__class__("R1", participant.participant_id, base.bets, base.submitted_at_msk))
-        bot = BotService(repo, tg, lambda: self.round_.deadline_msk, admin_ids={"99"}, tournament_chat_id=-100)
-        bot._current_update_id = "first"
-        with self.assertRaises(OSError):
+        with tempfile.TemporaryDirectory() as output:
+            repo, tg = FailingRepository(), FakeTelegram()
+            repo.save_round(self.round_)
+            participant = repo.register_participant("42", "Игрок")
+            base = __import__("test_validators").valid_prediction()
+            repo.save_prediction(base.__class__("R1", participant.participant_id, base.bets, base.submitted_at_msk))
+            bot = BotService(repo, tg, lambda: self.round_.deadline_msk, admin_ids={"99"}, tournament_chat_id=-100, output_dir=output)
+            bot._current_update_id = "first"
+            with self.assertRaises(OSError):
+                bot._publish(9, "99")
+            first_count = len([item for item in tg.messages if item[0] == -100])
+            bot._current_update_id = "replay"
             bot._publish(9, "99")
-        first_count = len([item for item in tg.messages if item[0] == -100])
-        bot._current_update_id = "replay"
-        bot._publish(9, "99")
-        self.assertEqual(len([item for item in tg.messages if item[0] == -100]), first_count)
-        self.assertIn("Восстановить отправки", tg.messages[-1][1])
-        bot._outbox_menu(9, "99")
-        retry_button = next(row[0]["callback_data"] for row in tg.messages[-1][2]["inline_keyboard"] if row[0]["callback_data"].startswith("admin:outbox-retry:"))
-        bot._handle_callback({"id": "recover", "from": {"id": 99}, "data": retry_button, "message": {"message_id": 1, "chat": {"id": 9, "type": "private"}}})
-        bot._publish(9, "99")
-        self.assertGreater(len([item for item in tg.messages if item[0] == -100]), first_count)
+            self.assertEqual(len([item for item in tg.messages if item[0] == -100]), first_count)
+            self.assertIn("Восстановить отправки", tg.messages[-1][1])
+            bot._outbox_menu(9, "99")
+            retry_button = next(row[0]["callback_data"] for row in tg.messages[-1][2]["inline_keyboard"] if row[0]["callback_data"].startswith("admin:outbox-retry:"))
+            bot._handle_callback({"id": "recover", "from": {"id": 99}, "data": retry_button, "message": {"message_id": 1, "chat": {"id": 9, "type": "private"}}})
+            bot._publish(9, "99")
+            self.assertGreater(len([item for item in tg.messages if item[0] == -100]), first_count)
 
     def _event(self, match_id: str) -> None:
         self._callback(f"match:{match_id}")

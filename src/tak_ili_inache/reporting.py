@@ -7,14 +7,113 @@ import os
 import tempfile
 from collections import Counter, defaultdict
 from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .models import Participant, Prediction
+from .models import Market, Participant, Prediction, Round
+from .presentation import MARKET_ORDER, compact_team_name, public_event_label
 from .scoring import score_predictions
 
 BET_TYPE_LABELS = {"single": "Ординары", "express": "Экспрессы"}
+
+
+def build_predictions_export(
+    output_dir: str | Path,
+    round_: Round,
+    predictions: tuple[Prediction, ...],
+    participants: tuple[Participant, ...],
+) -> Path:
+    """Build an admin-friendly long CSV without Telegram identifiers."""
+    names = {item.participant_id: item.display_name for item in participants}
+    fixtures = {item.match_id: item for item in round_.fixtures}
+    rows: list[dict] = []
+    ordered = sorted(predictions, key=lambda item: (names.get(item.participant_id, ""), item.participant_id))
+    for player_no, prediction in enumerate(ordered, 1):
+        for bet_no, bet in enumerate(prediction.bets, 1):
+            combined_odds = Decimal("1")
+            for event in bet.events:
+                combined_odds *= event.odds_snapshot
+            payout = (Decimal(bet.stake) * combined_odds).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+            for event_no, event in enumerate(bet.events, 1):
+                fixture = fixtures.get(event.match_id)
+                rows.append(
+                    {
+                        "round_id": round_.round_id,
+                        "player_no": player_no,
+                        "display_name": names.get(prediction.participant_id, prediction.participant_id),
+                        "submitted_at_msk": prediction.submitted_at_msk.isoformat(),
+                        "bet_no": bet_no,
+                        "bet_type": bet.bet_type.value,
+                        "stake": bet.stake,
+                        "combined_odds": str(combined_odds),
+                        "potential_payout": int(payout),
+                        "event_no": event_no,
+                        "match_id": event.match_id,
+                        "kickoff_msk": fixture.kickoff_msk.isoformat() if fixture else "",
+                        "home_team": fixture.home_team if fixture else "",
+                        "away_team": fixture.away_team if fixture else "",
+                        "market": event.market.value,
+                        "total_line": str(event.total_line_snapshot) if event.total_line_snapshot is not None else "",
+                        "odds_snapshot": str(event.odds_snapshot),
+                    }
+                )
+    revision = hashlib.sha256(json.dumps(rows, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
+    directory = Path(output_dir) / "prediction_exports"
+    directory.mkdir(parents=True, exist_ok=True)
+    safe_round_id = "".join(character if character.isalnum() or character in "-_" else "_" for character in round_.round_id)[:48] or "round"
+    path = directory / f"predictions_{safe_round_id}_{revision}.csv"
+    if not path.exists():
+        _write_csv_atomic(path, rows, _prediction_export_fields())
+    return path
+
+
+def selection_popularity(round_: Round, predictions: tuple[Prediction, ...]) -> list[dict]:
+    counts: Counter = Counter()
+    bank: Counter = Counter()
+    sample_events = {}
+    for prediction in predictions:
+        for bet in prediction.bets:
+            for event in bet.events:
+                key = (event.match_id, event.market)
+                counts[key] += 1
+                bank[key] += bet.stake
+                sample_events.setdefault(key, event)
+    rows = []
+    for fixture in round_.fixtures:
+        for market in MARKET_ORDER:
+            key = (fixture.match_id, market)
+            if not counts[key]:
+                continue
+            event = sample_events[key]
+            rows.append(
+                {
+                    "match_id": fixture.match_id,
+                    "market": market.value,
+                    "label": public_event_label(round_, event),
+                    "count": counts[key],
+                    "bank": bank[key],
+                }
+            )
+    return sorted(rows, key=lambda item: (-item["count"], item["label"]))
+
+
+def build_popularity_chart(
+    output_dir: str | Path,
+    round_: Round,
+    predictions: tuple[Prediction, ...],
+) -> tuple[Path, list[dict]]:
+    rows = selection_popularity(round_, predictions)
+    revision = hashlib.sha256(
+        json.dumps([round_.round_id, round_.checksum, rows], ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()[:16]
+    directory = Path(output_dir) / "publication" / "bundles" / revision
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "selection_popularity.png"
+    if not path.exists():
+        _selection_heatmap(path, round_, rows)
+    return path, rows
 
 
 def build_reports(output_dir: str | Path, round_id: str, predictions: tuple[Prediction, ...], results, participants: tuple[Participant, ...], scored_at: datetime) -> dict[str, Path]:
@@ -74,6 +173,54 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
         writer = csv.DictWriter(target, fieldnames=list(rows[0]) if rows else ["round_id"])
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _write_csv_atomic(path: Path, rows: list[dict], fieldnames: list[str]) -> None:
+    with tempfile.NamedTemporaryFile("w", dir=path.parent, encoding="utf-8", newline="", delete=False) as target:
+        temp = Path(target.name)
+        writer = csv.DictWriter(target, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+        target.flush()
+        os.fsync(target.fileno())
+    os.replace(temp, path)
+
+
+def _prediction_export_fields() -> list[str]:
+    return [
+        "round_id", "player_no", "display_name", "submitted_at_msk",
+        "bet_no", "bet_type", "stake", "combined_odds", "potential_payout",
+        "event_no", "match_id", "kickoff_msk", "home_team", "away_team",
+        "market", "total_line", "odds_snapshot",
+    ]
+
+
+def _selection_heatmap(path: Path, round_: Round, rows: list[dict]) -> None:
+    title_font, label_font = _fonts()
+    left, top, cell_width, row_height = 430, 110, 112, 54
+    width = left + cell_width * len(MARKET_ORDER) + 28
+    height = top + row_height * len(round_.fixtures) + 40
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+    draw.text((28, 24), "Полная статистика выбора событий", font=title_font, fill="#18212f")
+    draw.text((28, 66), f"Тур {round_.round_id}: число выборов по каждому матчу", font=label_font, fill="#52606d")
+    for index, market in enumerate(MARKET_ORDER):
+        x = left + index * cell_width
+        draw.text((x + 36, top - 34), market.value, font=label_font, fill="#18212f")
+    values = {(item["match_id"], item["market"]): int(item["count"]) for item in rows}
+    maximum = max(values.values(), default=1)
+    for row_no, fixture in enumerate(round_.fixtures):
+        y = top + row_no * row_height
+        match = f"{compact_team_name(fixture.home_team, 16)} — {compact_team_name(fixture.away_team, 16)}"
+        draw.text((28, y + 14), _truncate(match, 34), font=label_font, fill="#18212f")
+        for column, market in enumerate(MARKET_ORDER):
+            value = values.get((fixture.match_id, market.value), 0)
+            ratio = value / maximum if maximum else 0
+            color = (int(240 - 155 * ratio), int(246 - 105 * ratio), 255)
+            x = left + column * cell_width
+            draw.rounded_rectangle((x, y + 5, x + cell_width - 10, y + row_height - 5), radius=7, fill=color)
+            draw.text((x + 40, y + 14), str(value), font=label_font, fill="#18212f")
+    image.save(path, format="PNG", optimize=True)
 
 
 def _charts(directory: Path, leaderboard, scoring) -> dict[str, Path]:
