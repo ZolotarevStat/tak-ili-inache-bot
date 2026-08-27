@@ -6,7 +6,7 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from tak_ili_inache.models import Bet, BetEvent, BetResult, BetType, Market, Prediction
-from tak_ili_inache.scoring import score_partial_predictions, score_predictions
+from tak_ili_inache.scoring import score_partial_bets, score_partial_predictions, score_predictions
 
 NOW = datetime(2026, 6, 1, tzinfo=ZoneInfo("Europe/Moscow"))
 
@@ -66,6 +66,37 @@ class ScoringGoldenTests(unittest.TestCase):
         by_id = {row.participant_id: row for row in board}
         self.assertEqual((by_id["live"].realized_payout, by_id["live"].settled_bets, by_id["live"].pending_bets), (2000, 1, 1))
         self.assertEqual((by_id["lost"].realized_payout, by_id["lost"].settled_bets, by_id["lost"].pending_bets), (0, 1, 0))
+
+    def test_partial_bet_statuses_returns_and_remaining_ceiling(self) -> None:
+        prediction_ = Prediction(
+            "R1", "p",
+            (
+                Bet(BetType.SINGLE, 1000, (BetEvent("M1", Market.P1, Decimal("1.77")),)),
+                Bet(BetType.SINGLE, 500, (BetEvent("M2", Market.P1, Decimal("2.00")),)),
+                Bet(BetType.SINGLE, 750, (BetEvent("M3", Market.P1, Decimal("3.00")),)),
+                Bet(BetType.SINGLE, 1000, (BetEvent("M4", Market.P1, Decimal("2.00")),)),
+                Bet(BetType.EXPRESS, 1750, (
+                    BetEvent("M5", Market.P1, Decimal("1.50")),
+                    BetEvent("M6", Market.P1, Decimal("2.00")),
+                )),
+            ), NOW,
+        )
+        scored, board = score_partial_bets(
+            [prediction_],
+            [
+                BetResult("M1", frozenset({Market.P1})),
+                BetResult("M2", frozenset()),
+                BetResult("M3", returned_markets=frozenset({Market.P1})),
+                BetResult("M5", returned_markets=frozenset({Market.P1})),
+            ],
+        )
+        self.assertEqual([item.status for item in scored], ["won", "lost", "returned", "pending", "pending"])
+        self.assertEqual([item.realized_payout for item in scored], [1770, 0, 750, 0, 0])
+        self.assertEqual([item.maximum_payout for item in scored], [1770, 0, 750, 2000, 3500])
+        self.assertEqual(scored[-1].event_statuses, ("returned", "pending"))
+        self.assertEqual(board[0].realized_payout, 2520)
+        self.assertEqual(board[0].maximum_payout, 8020)
+        self.assertEqual(board[0].returned_bets, 1)
 
     def test_complete_partial_board_matches_final_gross_and_ranks(self) -> None:
         predictions = [

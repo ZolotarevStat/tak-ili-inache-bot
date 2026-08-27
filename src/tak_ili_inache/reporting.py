@@ -12,44 +12,123 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .models import Market, Participant, Prediction, Round
+from .models import BetResult, Market, Participant, Prediction, Round
 from .presentation import MARKET_ORDER, compact_team_name, public_event_label
-from .scoring import score_predictions
+from .scoring import score_partial_bets, score_predictions
 
 BET_TYPE_LABELS = {"single": "Ординары", "express": "Экспрессы"}
 
 
-def build_public_coupons(
+def build_public_coupons_csv(
     output_dir: str | Path,
     round_: Round,
     predictions: tuple[Prediction, ...],
     participants: tuple[Participant, ...],
 ) -> Path:
-    """Build one human-readable public file without internal identifiers."""
+    """Build one Excel-friendly public CSV without internal identifiers."""
     names = {item.participant_id: item.display_name for item in participants}
-    blocks = [f"Прогнозы тура {round_.round_id}", f"Участников: {len(predictions)}"]
+    fixtures = {item.match_id: item for item in round_.fixtures}
+    rows: list[dict] = []
     ordered = sorted(predictions, key=lambda item: (names.get(item.participant_id, ""), item.participant_id))
-    for prediction in ordered:
-        lines = [f"Купон: {names.get(prediction.participant_id, 'Участник')}"]
+    for player_no, prediction in enumerate(ordered, 1):
         for bet_no, bet in enumerate(prediction.bets, 1):
-            bet_type = "Ординар" if bet.bet_type.value == "single" else "Экспресс"
-            lines.append(f"{bet_no}. {bet_type} · {bet.stake}")
-            lines.extend(f"   {public_event_label(round_, event, include_odds=True)}" for event in bet.events)
-        blocks.append("\n".join(lines))
-    content = "\n\n".join(blocks) + "\n"
-    revision = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+            combined_odds = Decimal("1")
+            for event in bet.events:
+                combined_odds *= event.odds_snapshot
+            potential = _rounded_payout(bet.stake, combined_odds)
+            for event_no, event in enumerate(bet.events, 1):
+                fixture = fixtures[event.match_id]
+                rows.append(
+                    {
+                        "Тур": _csv_text(round_.round_id),
+                        "Игрок №": player_no,
+                        "Игрок": _csv_text(_public_name(names, prediction.participant_id)),
+                        "Ставка №": bet_no,
+                        "Тип": "Ординар" if bet.bet_type.value == "single" else "Экспресс",
+                        "Сумма": bet.stake,
+                        "Коэф. ставки": str(combined_odds),
+                        "Потенциал": potential,
+                        "Событие №": event_no,
+                        "Начало МСК": fixture.kickoff_msk.strftime("%d.%m.%Y %H:%M"),
+                        "Матч": _csv_text(f"{fixture.home_team} — {fixture.away_team}"),
+                        "Исход": _market_label(event.market, event.total_line_snapshot),
+                        "Коэф. события": str(event.odds_snapshot),
+                    }
+                )
+    revision = hashlib.sha256(
+        json.dumps(["public-csv-v1", round_.checksum, rows], ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()[:16]
     directory = Path(output_dir) / "publication" / "bundles" / revision
     directory.mkdir(parents=True, exist_ok=True)
     safe_round_id = "".join(character if character.isalnum() or character in "-_" else "_" for character in round_.round_id)[:48] or "round"
-    path = directory / f"coupons_{safe_round_id}.txt"
+    path = directory / f"coupons_{safe_round_id}.csv"
     if not path.exists():
-        with tempfile.NamedTemporaryFile("w", dir=directory, encoding="utf-8", delete=False) as target:
-            temp = Path(target.name)
-            target.write(content)
-            target.flush()
-            os.fsync(target.fileno())
-        os.replace(temp, path)
+        _write_csv_atomic(path, rows, list(rows[0]) if rows else _public_coupon_fields(), encoding="utf-8-sig")
     return path
+
+
+def build_interim_results_export(
+    output_dir: str | Path,
+    round_: Round,
+    predictions: tuple[Prediction, ...],
+    results: tuple[BetResult, ...],
+    participants: tuple[Participant, ...],
+) -> tuple[Path, list]:
+    """Build a public interim CSV with realized and not-guaranteed ceilings."""
+    names = {item.participant_id: item.display_name for item in participants}
+    fixtures = {item.match_id: item for item in round_.fixtures}
+    scored, leaderboard = score_partial_bets(list(predictions), list(results))
+    by_bet = {(item.participant_id, item.bet_no): item for item in scored}
+    by_player = {item.participant_id: item for item in leaderboard}
+    rows: list[dict] = []
+    ordered = sorted(
+        predictions,
+        key=lambda item: (by_player[item.participant_id].rank, names.get(item.participant_id, ""), item.participant_id),
+    )
+    for player_no, prediction in enumerate(ordered, 1):
+        summary = by_player[prediction.participant_id]
+        pending_ceiling = summary.maximum_payout - summary.realized_payout
+        for bet_no, bet in enumerate(prediction.bets, 1):
+            scored_bet = by_bet[(prediction.participant_id, bet_no)]
+            for event_no, (event, event_status) in enumerate(zip(bet.events, scored_bet.event_statuses), 1):
+                fixture = fixtures[event.match_id]
+                rows.append(
+                    {
+                        "Тур": _csv_text(round_.round_id),
+                        "Место": summary.rank,
+                        "Игрок №": player_no,
+                        "Игрок": _csv_text(_public_name(names, prediction.participant_id)),
+                        "Начислено": summary.realized_payout,
+                        "Макс. выплата ожидающих": pending_ceiling,
+                        "Макс. итог": summary.maximum_payout,
+                        "Ставка №": bet_no,
+                        "Тип": "Ординар" if bet.bet_type.value == "single" else "Экспресс",
+                        "Сумма": bet.stake,
+                        "Статус ставки": _status_label(scored_bet.status),
+                        "Выплата ставки": scored_bet.realized_payout,
+                        "Макс. выплата ставки": scored_bet.maximum_payout,
+                        "Событие №": event_no,
+                        "Начало МСК": fixture.kickoff_msk.strftime("%d.%m.%Y %H:%M"),
+                        "Матч": _csv_text(f"{fixture.home_team} — {fixture.away_team}"),
+                        "Исход": _market_label(event.market, event.total_line_snapshot),
+                        "Коэф. события": str(event.odds_snapshot),
+                        "Статус события": _status_label(event_status),
+                    }
+                )
+    normalized_results = [
+        (item.match_id, sorted(market.value for market in item.winning_markets), sorted(market.value for market in item.returned_markets))
+        for item in sorted(results, key=lambda item: item.match_id)
+    ]
+    revision = hashlib.sha256(
+        json.dumps(["interim-csv-v1", round_.checksum, rows, normalized_results], ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()[:16]
+    directory = Path(output_dir) / "publication" / "interim" / revision
+    directory.mkdir(parents=True, exist_ok=True)
+    safe_round_id = "".join(character if character.isalnum() or character in "-_" else "_" for character in round_.round_id)[:48] or "round"
+    path = directory / f"interim_{safe_round_id}.csv"
+    if not path.exists():
+        _write_csv_atomic(path, rows, list(rows[0]) if rows else _interim_fields(), encoding="utf-8-sig")
+    return path, leaderboard
 
 
 def build_predictions_export(
@@ -75,7 +154,7 @@ def build_predictions_export(
                     {
                         "round_id": round_.round_id,
                         "player_no": player_no,
-                        "display_name": names.get(prediction.participant_id, prediction.participant_id),
+                        "display_name": _public_name(names, prediction.participant_id),
                         "submitted_at_msk": prediction.submitted_at_msk.isoformat(),
                         "bet_no": bet_no,
                         "bet_type": bet.bet_type.value,
@@ -208,8 +287,10 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
         writer.writerows(rows)
 
 
-def _write_csv_atomic(path: Path, rows: list[dict], fieldnames: list[str]) -> None:
-    with tempfile.NamedTemporaryFile("w", dir=path.parent, encoding="utf-8", newline="", delete=False) as target:
+def _write_csv_atomic(
+    path: Path, rows: list[dict], fieldnames: list[str], encoding: str = "utf-8"
+) -> None:
+    with tempfile.NamedTemporaryFile("w", dir=path.parent, encoding=encoding, newline="", delete=False) as target:
         temp = Path(target.name)
         writer = csv.DictWriter(target, fieldnames=fieldnames)
         writer.writeheader()
@@ -217,6 +298,58 @@ def _write_csv_atomic(path: Path, rows: list[dict], fieldnames: list[str]) -> No
         target.flush()
         os.fsync(target.fileno())
     os.replace(temp, path)
+
+
+def _rounded_payout(stake: int, odds: Decimal) -> int:
+    return int((Decimal(stake) * odds).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def _csv_text(value: str) -> str:
+    """Neutralize spreadsheet formulas in externally supplied text cells."""
+    value = value.replace("\r", " ").replace("\n", " ")
+    if value.lstrip().startswith(("=", "+", "-", "@", "\t")):
+        return "'" + value
+    return value
+
+
+def _public_name(names: dict[str, str], participant_id: str) -> str:
+    name = names.get(participant_id)
+    if not name:
+        raise ValueError("participant display name missing")
+    return name
+
+
+def _market_label(market: Market, total_line: Decimal | None) -> str:
+    if market in {Market.TB, Market.TM} and total_line is not None:
+        return f"{market.value} {total_line}"
+    return market.value
+
+
+def _status_label(status: str) -> str:
+    return {
+        "won": "зашло",
+        "lost": "не зашло",
+        "returned": "возврат",
+        "pending": "ожидается",
+    }[status]
+
+
+def _public_coupon_fields() -> list[str]:
+    return [
+        "Тур", "Игрок №", "Игрок", "Ставка №", "Тип", "Сумма",
+        "Коэф. ставки", "Потенциал", "Событие №", "Начало МСК", "Матч",
+        "Исход", "Коэф. события",
+    ]
+
+
+def _interim_fields() -> list[str]:
+    return [
+        "Тур", "Место", "Игрок №", "Игрок", "Начислено",
+        "Макс. выплата ожидающих", "Макс. итог", "Ставка №", "Тип",
+        "Сумма", "Статус ставки", "Выплата ставки", "Макс. выплата ставки",
+        "Событие №", "Начало МСК", "Матч", "Исход", "Коэф. события",
+        "Статус события",
+    ]
 
 
 def _prediction_export_fields() -> list[str]:

@@ -6,15 +6,15 @@
 |---|---|
 | Package | `tak-ili-inache-bot` |
 | Version | `0.1.0` |
-| Release status | `COMPACT PUBLICATION P1 ACTIVE / LOCAL+REMOTE PASS` |
-| Open gate | owner smoke: /admin button visibility and one deliberate publication |
+| Release status | `CSV INTERIM P1 LOCAL PASS / REMOTE PENDING` |
+| Open gate | immutable remote install, activation, strict health and owner publication smoke |
 | Application MVP baseline commit | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` |
 | S3/infra publication commit | `4a3540f98f6c310c7a842caaf9679218802b15a0` |
-| Active application feature commit | `0988ce1` on `feature/group-admin-ux-p1` |
-| Release ID | `0.1.0-compact-publication-p1-20260827-local` |
-| Local verification at | `2026-08-27, compact publication P1, 171-test local package pass` |
+| Active application feature commit | `local CSV/interim worktree` on `feature/group-admin-ux-p1` |
+| Release ID | `0.1.0-csv-interim-p1-20260827-local` |
+| Local verification at | `2026-08-27, CSV/interim P1, 174-test local package pass` |
 | Python | `3.12.7` local; `3.13.5` VDS |
-| Candidate runtime digest ×2 | `sha256:e51cdc2efbc050237cd960b0aa8491c9c08e9993d9317ca7b0b2f1595098c50b` |
+| Candidate runtime digest ×2 | `sha256:6b070bfa3667ba4a49629fca64b0e43108dca38eb6f5e53edb5fc338929563b1` |
 | Active VDS release | `0.1.0-compact-publication-p1-20260827-local` |
 
 The score-entry candidate passed immutable installation, the Python 3.13.5
@@ -44,6 +44,25 @@ Planning-документы, audits, tests, runtime data, venv и build products
 изменить этот digest. Он воспроизводимо рассчитан дважды с идентичным результатом.
 
 ## Verification results
+
+## CSV publication and actionable interim P1 — LOCAL PASS / REMOTE PENDING
+
+| Field | Value |
+|---|---|
+| Release ID | `0.1.0-csv-interim-p1-20260827-local` |
+| Runtime digest ×2 | `sha256:6b070bfa3667ba4a49629fca64b0e43108dca38eb6f5e53edb5fc338929563b1` |
+| Scope | public coupons CSV instead of TXT; one interim CSV document with event/bet statuses, realized payout and remaining ceiling; compact in-place admin card |
+| Full suite | `Ran 174 tests` / `OK` |
+| Static/sensitive verification | compile, shell syntax, diff check and sensitive scan PASS |
+| External status | pending immutable install and activation |
+
+Public group CSV files exclude Telegram, participant and match IDs, neutralize
+spreadsheet formula prefixes and remove embedded line breaks. Intermediate rank
+is based on realized gross points; the file separately shows the maximum payout
+of pending bets and the maximum final total. A full return is labeled as a
+return. Successful admin callbacks edit the existing compact card and do not
+append success logs. Legacy and current pending publication operations remain
+fail-closed until reconciliation.
 
 ## Compact publication P1 — LOCAL+REMOTE PASS / ACTIVE
 

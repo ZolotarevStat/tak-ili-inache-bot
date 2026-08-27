@@ -97,6 +97,23 @@ class PartialLeaderboardEntry:
     realized_payout: int
     settled_bets: int
     pending_bets: int
+    maximum_payout: int = 0
+    winning_bets: int = 0
+    losing_bets: int = 0
+    returned_bets: int = 0
+
+
+@dataclass(frozen=True)
+class PartialScoredBet:
+    participant_id: str
+    bet_no: int
+    bet_type: BetType
+    stake: int
+    status: str
+    combined_odds: Decimal
+    realized_payout: int
+    maximum_payout: int
+    event_statuses: tuple[str, ...]
 
 
 @dataclass(frozen=True)

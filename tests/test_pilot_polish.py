@@ -64,7 +64,7 @@ class PilotPolishTests(unittest.TestCase):
             self.assertNotIn("participant_id", rows[0])
             self.assertNotIn("777777", path.read_text(encoding="utf-8"))
 
-    def test_publication_uses_one_coupon_file_and_one_top_10_png(self) -> None:
+    def test_publication_uses_one_coupon_csv_and_one_top_10_png(self) -> None:
         repo, tg = FakeRepository(), FakeTelegram()
         repo.save_round(self.round_)
         first = repo.register_participant("1", "Игрок Один")
@@ -83,13 +83,16 @@ class PilotPolishTests(unittest.TestCase):
             self.assertFalse(any(chat_id == -100 for chat_id, _, _ in tg.messages))
             group_documents = [item for item in tg.documents if item[0] == -100]
             self.assertEqual(len(group_documents), 1)
-            coupons = Path(group_documents[0][1]).read_text(encoding="utf-8")
-            self.assertIn("Купон: Игрок Один", coupons)
-            self.assertIn("Купон: Игрок Два", coupons)
-            self.assertIn("Мексика — ЮАР · П1", coupons)
+            path = Path(group_documents[0][1])
+            self.assertEqual(path.suffix, ".csv")
+            with path.open(encoding="utf-8-sig", newline="") as source:
+                rows = list(csv.DictReader(source))
+            self.assertEqual({row["Игрок"] for row in rows}, {"Игрок Один", "Игрок Два"})
+            self.assertTrue(any(row["Матч"] == "Мексика — ЮАР" and row["Исход"] == "П1" for row in rows))
+            coupons = path.read_text(encoding="utf-8-sig")
             self.assertNotRegex(coupons, r"\bM\d{2}\b")
-            self.assertNotIn(first.participant_id, coupons)
-            self.assertNotIn(second.participant_id, coupons)
+            self.assertNotIn("participant_id", coupons)
+            self.assertNotIn("telegram_id", coupons)
             self.assertEqual(len(tg.photos), 1)
             chart = Path(tg.photos[0][1])
             self.assertEqual(chart.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
@@ -112,7 +115,7 @@ class PilotPolishTests(unittest.TestCase):
         self.assertFalse(any(item[0] == -100 for item in tg.documents + tg.photos))
         self.assertIn("Восстановить отправки", tg.messages[-1][1])
 
-    def test_interim_leaderboard_is_one_idempotent_group_message(self) -> None:
+    def test_interim_results_are_one_idempotent_csv_document(self) -> None:
         repo, tg = FakeRepository(), FakeTelegram()
         repo.save_round(self.round_)
         first = repo.register_participant("1", "Игрок Один")
@@ -129,20 +132,32 @@ class PilotPolishTests(unittest.TestCase):
         self.assertIn("Опубликовать промежуточный рейтинг", labels)
 
         bot._publish_interim(9, "99")
-        group = [text for chat_id, text, _ in tg.messages if chat_id == -100]
+        group = [item for item in tg.documents if item[0] == -100]
         self.assertEqual(len(group), 1)
-        self.assertIn("Завершено матчей: 1/12", group[0])
-        self.assertIn("Игрок Один", group[0])
-        self.assertIn("Рейтинг предварительный", group[0])
-        self.assertLessEqual(len(group[0]), 4000)
+        self.assertFalse(any(chat_id == -100 for chat_id, _, _ in tg.messages))
+        self.assertIn("Матчей: 1/12", group[0][2])
+        self.assertIn("Игрок Один", group[0][2])
+        self.assertIn("Максимум не гарантирован", group[0][2])
+        self.assertLessEqual(len(group[0][2]), 1000)
+        with Path(group[0][1]).open(encoding="utf-8-sig", newline="") as source:
+            rows = list(csv.DictReader(source))
+        first_rows = [row for row in rows if row["Игрок"] == "Игрок Один"]
+        self.assertEqual(first_rows[0]["Статус события"], "зашло")
+        self.assertEqual(first_rows[0]["Статус ставки"], "зашло")
+        self.assertGreater(int(first_rows[0]["Начислено"]), 0)
+        self.assertGreater(int(first_rows[0]["Макс. выплата ожидающих"]), 0)
+        self.assertEqual(
+            int(first_rows[0]["Макс. итог"]),
+            int(first_rows[0]["Начислено"]) + int(first_rows[0]["Макс. выплата ожидающих"]),
+        )
         bot._publish_interim(9, "99")
-        self.assertEqual(len([item for item in tg.messages if item[0] == -100]), 1)
+        self.assertEqual(len([item for item in tg.documents if item[0] == -100]), 1)
 
         repo.save_result(BetResult("M02", frozenset({Market.P1, Market.ONE_X, Market.TB})))
         bot._publish_interim(9, "99")
-        self.assertEqual(len([item for item in tg.messages if item[0] == -100]), 2)
+        self.assertEqual(len([item for item in tg.documents if item[0] == -100]), 2)
 
-    def test_interim_leaderboard_stays_within_one_telegram_message(self) -> None:
+    def test_interim_caption_stays_within_telegram_document_limit(self) -> None:
         repo, tg = FakeRepository(), FakeTelegram()
         repo.save_round(self.round_)
         for index in range(40):
@@ -154,9 +169,40 @@ class PilotPolishTests(unittest.TestCase):
             admin_ids={"99"}, tournament_chat_id=-100,
         )
         bot._publish_interim(9, "99")
-        text = next(text for chat_id, text, _ in tg.messages if chat_id == -100)
-        self.assertLessEqual(len(text), 4000)
-        self.assertIn("…ещё участников:", text)
+        caption = next(caption for chat_id, _, caption in tg.documents if chat_id == -100)
+        self.assertLessEqual(len(caption), 1000)
+        self.assertIn("…ещё участников:", caption)
+
+    def test_group_csv_neutralizes_formula_prefixes_and_newlines(self) -> None:
+        repo, tg = FakeRepository(), FakeTelegram()
+        repo.save_round(self.round_)
+        participant = repo.register_participant("1", "=SUM(A1:A2)\nИгрок")
+        repo.save_prediction(self._prediction(participant.participant_id, (Market.P1,) * 6), "p1")
+        with tempfile.TemporaryDirectory() as output:
+            bot = BotService(
+                repo, tg, lambda: self.round_.deadline_msk,
+                admin_ids={"99"}, tournament_chat_id=-100, output_dir=output,
+            )
+            bot._publish(9, "99")
+            with Path(tg.documents[0][1]).open(encoding="utf-8-sig", newline="") as source:
+                rows = list(csv.DictReader(source))
+        self.assertEqual(rows[0]["Игрок"], "'=SUM(A1:A2) Игрок")
+
+    def test_successful_admin_publication_refreshes_card_without_private_log_message(self) -> None:
+        repo, tg = FakeRepository(), FakeTelegram()
+        repo.save_round(self.round_)
+        participant = repo.register_participant("1", "Игрок")
+        repo.save_prediction(self._prediction(participant.participant_id, (Market.P1,) * 6), "p1")
+        with tempfile.TemporaryDirectory() as output:
+            bot = BotService(
+                repo, tg, lambda: self.round_.deadline_msk,
+                admin_ids={"99"}, tournament_chat_id=-100, output_dir=output,
+            )
+            bot._publish(9, "99", message_id=123)
+        self.assertEqual(tg.send_calls, 0)
+        self.assertEqual(len(tg.edits), 1)
+        self.assertEqual(tg.edits[0][:2], (9, 123))
+        self.assertIn("🛠️ Админские команды", tg.edits[0][2])
 
     def test_top_10_caption_stays_below_telegram_photo_limit(self) -> None:
         rows = [

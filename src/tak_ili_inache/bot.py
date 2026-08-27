@@ -16,9 +16,14 @@ from typing import Callable
 
 from .fixtures import import_fixtures
 from .models import Bet, BetEvent, BetResult, BetType, Fixture, Market, Prediction, Round
-from .reporting import build_popularity_chart, build_predictions_export, build_public_coupons, build_reports
+from .reporting import (
+    build_interim_results_export,
+    build_popularity_chart,
+    build_predictions_export,
+    build_public_coupons_csv,
+    build_reports,
+)
 from .presentation import compact_match_label, public_event_label
-from .scoring import score_partial_predictions
 from .repository import Repository
 from .delivery import UnknownDeliveryError
 from .telegram_api import TelegramClient, TelegramHttpError
@@ -327,9 +332,9 @@ class BotService:
         elif data == "admin:status":
             self._admin_status(chat_id, telegram_id)
         elif data == "admin:publish":
-            self._publish(chat_id, telegram_id)
+            self._publish(chat_id, telegram_id, message.get("message_id"))
         elif data == "admin:publish-interim":
-            self._publish_interim(chat_id, telegram_id)
+            self._publish_interim(chat_id, telegram_id, message.get("message_id"))
         elif data == "admin:export-predictions":
             self._export_predictions(chat_id, telegram_id)
         elif data == "admin:results":
@@ -419,7 +424,6 @@ class BotService:
             return
         round_ = self.repository.get_active_round()
         buttons = [("Формат и пример CSV", "admin:csv-format")]
-        action_lines = ["📥 Загрузить тур — отправить CSV и проверить данные"]
         if self.repository.pending_operations():
             buttons.append(("Восстановить отправки", "admin:outbox"))
         if round_:
@@ -430,41 +434,40 @@ class BotService:
             buttons.append(("Статус сдачи", "admin:status"))
             if predictions:
                 buttons.append(("Выгрузить прогнозы CSV", "admin:export-predictions"))
-                action_lines.append("📤 Выгрузить прогнозы — CSV для самостоятельной аналитики")
             if self.now() < round_.deadline_msk:
-                action_lines.append("🔓 Тур открыт до дедлайна")
                 if smoke:
                     stage = "open (тестовый)"
                     buttons += [("Закрыть тестовый тур без расчёта", "admin:close")]
-                    action_lines.append("🧪 Тестовый тур можно закрыть без расчёта в любой момент; история сохранится")
             else:
                 buttons += [("Опубликовать прогнозы", "admin:publish")]
-                action_lines.append("🔒 Прогнозы можно опубликовать после дедлайна")
                 if smoke:
                     stage = "results/scoring (тестовый)"
                     buttons += [("Закрыть тестовый тур без расчёта", "admin:close")]
-                    action_lines.append("🧪 Тестовый тур можно закрыть без расчёта в любой момент; история сохранится")
                 elif self.repository.round_scored(round_.round_id):
                     stage = "scored"
                     buttons += [("Завершить и архивировать тур", "admin:close")]
-                    action_lines.append("✅ Расчёт завершён — следующий шаг: архивировать тур")
                 elif result_count < len(round_.fixtures):
                     stage = "results"
                     buttons += [("Внести результаты", "admin:results")]
-                    action_lines.append("🧾 Следующий шаг: внести результаты всех матчей")
                     if predictions and result_count:
                         buttons += [("Опубликовать промежуточный рейтинг", "admin:publish-interim")]
-                        action_lines.append("📊 Промежуточный рейтинг — одним сообщением в группе")
                 else:
                     stage = "scoring"
                     buttons += [("Скоринг", "admin:score")]
-                    action_lines.append("🧮 Следующий шаг: рассчитать результаты")
         else:
             predictions = result_count = 0
             stage = "архивирован / нет активного"
         confirmed = len(self.repository.latest_predictions(round_.round_id)) if round_ else 0
         deadline = f"{round_.deadline_msk:%d.%m %H:%M} МСК" if round_ else "—"
-        self._admin_card(chat_id, message_id, "🛠️ Админские команды\n" + "\n".join(action_lines) + f"\n\n🏟️ Текущий тур: {round_.round_id if round_ else 'нет (последний архивирован)'}\n📍 Этап: {stage}\n⏰ Дедлайн: {deadline}\n⚽ Матчей: {len(round_.fixtures) if round_ else 0}\n📝 Подтверждено прогнозов: {confirmed}\n📊 Результаты: {result_count}/{len(round_.fixtures) if round_ else 0}\n\nВыберите доступное действие:", _keyboard(buttons))
+        self._admin_card(
+            chat_id,
+            message_id,
+            f"🛠️ Админские команды\n"
+            f"🏟️ Тур: {round_.round_id if round_ else 'нет'} · {stage}\n"
+            f"⏰ {deadline}\n"
+            f"📝 Прогнозы: {confirmed} · 📊 Результаты: {result_count}/{len(round_.fixtures) if round_ else 0}",
+            _keyboard(buttons),
+        )
 
     def _csv_format(self, chat_id: int, telegram_id: str) -> None:
         if not self._is_admin(telegram_id):
@@ -595,7 +598,7 @@ class BotService:
         missing = [item.display_name for item in people if item.participant_id not in submitted]
         self.telegram.send_message(chat_id, f"Тур {round_.round_id}: сдали {len(done)}/{len(people)}.\nСдали: {', '.join(done) or '—'}\nНе сдали: {', '.join(missing) or '—'}")
 
-    def _publish(self, chat_id: int, telegram_id: str) -> None:
+    def _publish(self, chat_id: int, telegram_id: str, message_id: int | None = None) -> None:
         if not self._is_admin(telegram_id):
             self.telegram.send_message(chat_id, "Недостаточно прав.")
             return
@@ -606,7 +609,7 @@ class BotService:
         if self.tournament_chat_id is None:
             self.telegram.send_message(chat_id, "TOURNAMENT_CHAT_ID не настроен.")
             return
-        if any(key.startswith(("publish-v2:", "publish-v3:")) for key in self.repository.pending_operations()):
+        if any(key.startswith(("publish-v2:", "publish-v3:", "publish-v4:")) for key in self.repository.pending_operations()):
             self._recovery_notice(chat_id)
             return
         predictions = self.repository.latest_predictions(round_.round_id)
@@ -616,15 +619,15 @@ class BotService:
         names = {item.participant_id: item.display_name for item in self.repository.participants()}
         try:
             chart_path, popularity_rows = build_popularity_chart(self.output_dir, round_, predictions)
-            coupons_path = build_public_coupons(self.output_dir, round_, predictions, self.repository.participants())
+            coupons_path = build_public_coupons_csv(self.output_dir, round_, predictions, self.repository.participants())
         except Exception as error:
             logging.getLogger(__name__).exception("publish_bundle_failed round_id=%s", round_.round_id)
             self.telegram.send_message(chat_id, f"Публикация не начата: не удалось собрать материалы ({type(error).__name__}).")
             return
-        revision = hashlib.sha256(repr(("v3-compact-bundle", round_.checksum, predictions, sorted(names.items()))).encode()).hexdigest()[:16]
-        operation_key = f"publish-v3:{round_.round_id}:{revision}"
+        revision = hashlib.sha256(repr(("v4-csv-bundle", round_.checksum, predictions, sorted(names.items()))).encode()).hexdigest()[:16]
+        operation_key = f"publish-v4:{round_.round_id}:{revision}"
         if self.repository.operation_done(operation_key):
-            self.telegram.send_message(chat_id, "Эта публикация уже обработана.")
+            self._admin_menu(chat_id, telegram_id, message_id)
             return
         stats_caption = _top_stats_caption(round_.round_id, popularity_rows)
         if not self._send_once(
@@ -632,7 +635,7 @@ class BotService:
             lambda: self._delivery_telegram.send_document(
                 self.tournament_chat_id,
                 str(coupons_path),
-                f"Прогнозы тура {round_.round_id}: {len(predictions)} участников. Все купоны — в одном файле.",
+                f"🧾 Прогнозы тура {round_.round_id}\nУчастников: {len(predictions)}. Все купоны — в CSV.",
             ),
         ):
             self._recovery_notice(chat_id)
@@ -644,9 +647,9 @@ class BotService:
             self._recovery_notice(chat_id)
             return
         self.repository.mark_operation_done(operation_key)
-        self.telegram.send_message(chat_id, "Опубликовано двумя сообщениями: общий файл купонов и инфографика с топ-10.")
+        self._admin_menu(chat_id, telegram_id, message_id)
 
-    def _publish_interim(self, chat_id: int, telegram_id: str) -> None:
+    def _publish_interim(self, chat_id: int, telegram_id: str, message_id: int | None = None) -> None:
         if not self._is_admin(telegram_id):
             self.telegram.send_message(chat_id, "Недостаточно прав.")
             return
@@ -657,7 +660,7 @@ class BotService:
         if self.tournament_chat_id is None:
             self.telegram.send_message(chat_id, "TOURNAMENT_CHAT_ID не настроен.")
             return
-        if any(key.startswith(("interim-v1:", "interim-v2:")) for key in self.repository.pending_operations()):
+        if any(key.startswith(("interim-v1:", "interim-v2:", "interim-v3:")) for key in self.repository.pending_operations()):
             self._recovery_notice(chat_id)
             return
         predictions = self.repository.latest_predictions(round_.round_id)
@@ -671,29 +674,16 @@ class BotService:
         if len(results) >= len(round_.fixtures):
             self.telegram.send_message(chat_id, "Все результаты внесены — используйте финальный скоринг.")
             return
-        leaderboard = score_partial_predictions(list(predictions), list(results))
         names = {item.participant_id: item.display_name for item in self.repository.participants()}
-        lines = [
-            "📊 Предварительный рейтинг",
-            f"🏟 Тур: {round_.round_id}",
-            f"⚽ Завершено матчей: {len(results)}/{len(round_.fixtures)}",
-            "",
-        ]
-        omitted = 0
-        footer = "⏳ Рейтинг предварительный: нерассчитанные ставки, включая экспрессы, ещё могут изменить позиции."
-        for index, item in enumerate(leaderboard):
-            name = names.get(item.participant_id, "Участник")
-            row = f"{item.rank}. {name} — начислено {item.realized_payout:,} очков · рассчитано ставок: {item.settled_bets} из 5".replace(",", " ")
-            remaining = len(leaderboard) - index - 1
-            suffix = ([f"…ещё участников: {remaining}"] if remaining else []) + ["", footer]
-            if len("\n".join(lines + [row] + suffix)) > 4000:
-                omitted = len(leaderboard) - index
-                break
-            lines.append(row)
-        if omitted:
-            lines.append(f"…ещё участников: {omitted}")
-        lines += ["", footer]
-        text = "\n".join(lines)
+        try:
+            interim_path, leaderboard = build_interim_results_export(
+                self.output_dir, round_, predictions, results, self.repository.participants()
+            )
+        except Exception as error:
+            logging.getLogger(__name__).exception("interim_bundle_failed round_id=%s", round_.round_id)
+            self.telegram.send_message(chat_id, f"Публикация не начата: не удалось собрать CSV ({type(error).__name__}).")
+            return
+        caption = _interim_caption(round_.round_id, len(results), len(round_.fixtures), leaderboard, names)
         normalized_results = tuple(
             (
                 result.match_id,
@@ -703,20 +693,20 @@ class BotService:
             for result in sorted(results, key=lambda item: item.match_id)
         )
         revision = hashlib.sha256(
-            repr(("interim-v2", round_.checksum, predictions, normalized_results, sorted(names.items()))).encode()
+            repr(("interim-v3-csv", round_.checksum, predictions, normalized_results, sorted(names.items()))).encode()
         ).hexdigest()[:16]
-        operation_key = f"interim-v2:{round_.round_id}:{revision}"
+        operation_key = f"interim-v3:{round_.round_id}:{revision}"
         if self.repository.operation_done(operation_key):
-            self.telegram.send_message(chat_id, "Этот промежуточный рейтинг уже опубликован.")
+            self._admin_menu(chat_id, telegram_id, message_id)
             return
         if not self._send_once(
-            f"{operation_key}:group-message",
-            lambda: self._delivery_telegram.send_message(self.tournament_chat_id, text),
+            f"{operation_key}:group-document",
+            lambda: self._delivery_telegram.send_document(self.tournament_chat_id, str(interim_path), caption),
         ):
             self._recovery_notice(chat_id)
             return
         self.repository.mark_operation_done(operation_key)
-        self.telegram.send_message(chat_id, f"Промежуточный рейтинг опубликован одним сообщением ({len(results)}/{len(round_.fixtures)} матчей).")
+        self._admin_menu(chat_id, telegram_id, message_id)
 
     def _export_predictions(self, chat_id: int, telegram_id: str) -> None:
         if not self._is_admin(telegram_id):
@@ -2368,7 +2358,7 @@ def _goal_keyboard(prefix: str, match_id: str) -> dict:
 
 
 def _is_inplace_admin_action(data: str) -> bool:
-    return data == "admin:menu" or data == "admin:results" or data.startswith((
+    return data in {"admin:menu", "admin:results", "admin:publish", "admin:publish-interim"} or data.startswith((
         "admin:result:",
         "admin:home-goals:",
         "admin:away-goals:",
@@ -2428,3 +2418,41 @@ def _top_stats_caption(round_id: str, rows: list[dict], limit: int = 1000) -> st
         lines.append(row)
     lines.append(footer)
     return "\n".join(lines)
+
+
+def _interim_caption(
+    round_id: str,
+    completed: int,
+    total: int,
+    leaderboard,
+    names: dict[str, str],
+    limit: int = 1000,
+) -> str:
+    """Summarize an interim CSV while staying below Telegram's caption cap."""
+    lines = [
+        f"📊 Промежуточные результаты · {round_id}",
+        f"Матчей: {completed}/{total}. Рейтинг — по уже начисленным очкам.",
+        "",
+    ]
+    footer = [
+        "",
+        "Подробно по каждой ставке и событию — в CSV.",
+        "Максимум не гарантирован: он предполагает победу всех ещё живых ставок.",
+    ]
+    for index, item in enumerate(leaderboard):
+        name = names.get(item.participant_id, "Участник")
+        if len(name) > 80:
+            name = name[:79].rstrip() + "…"
+        remaining_potential = item.maximum_payout - item.realized_payout
+        row = (
+            f"{item.rank}. {name} — начислено {item.realized_payout:,} · "
+            f"ещё возможно +{remaining_potential:,} · максимум {item.maximum_payout:,}"
+        ).replace(",", " ")
+        remaining = len(leaderboard) - index - 1
+        suffix = ([f"…ещё участников: {remaining}"] if remaining else []) + footer
+        if len("\n".join(lines + [row] + suffix)) > limit:
+            lines.append(f"…ещё участников: {remaining + 1}")
+            break
+        lines.append(row)
+    result = "\n".join(lines + footer)
+    return result[:limit]
