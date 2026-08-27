@@ -6,18 +6,18 @@
 |---|---|
 | Package | `tak-ili-inache-bot` |
 | Version | `0.1.0` |
-| Release status | `CSV INTERIM P1 LOCAL PASS / REMOTE PENDING` |
-| Open gate | immutable remote install, activation, strict health and owner publication smoke |
+| Release status | `CSV INTERIM P1 ACTIVE / LOCAL+REMOTE PASS` |
+| Open gate | owner smoke: one deliberate interim publication and CSV inspection |
 | Application MVP baseline commit | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` |
 | S3/infra publication commit | `4a3540f98f6c310c7a842caaf9679218802b15a0` |
-| Active application feature commit | `local CSV/interim worktree` on `feature/group-admin-ux-p1` |
+| Active application feature commit | `9f8c0be` on `feature/group-admin-ux-p1` |
 | Release ID | `0.1.0-csv-interim-p1-r1-20260827-local` |
 | Local verification at | `2026-08-27, CSV/interim P1, 174-test local package pass` |
 | Python | `3.12.7` local; `3.13.5` VDS |
 | Candidate runtime digest ×2 | `sha256:6b070bfa3667ba4a49629fca64b0e43108dca38eb6f5e53edb5fc338929563b1` |
-| Active VDS release | `0.1.0-compact-publication-p1-20260827-local` |
+| Active VDS release | `0.1.0-csv-interim-p1-r1-20260827-local` |
 
-The score-entry candidate passed immutable installation, the Python 3.13.5
+The CSV/interim candidate passed immutable installation, the Python 3.13.5
 suite, matching runtime digest, transactional activation, a completed long-poll,
 strict health and a control encrypted S3 backup. Active round data was preserved.
 
@@ -45,7 +45,7 @@ Planning-документы, audits, tests, runtime data, venv и build products
 
 ## Verification results
 
-## CSV publication and actionable interim P1 — LOCAL PASS / REMOTE PENDING
+## CSV publication and actionable interim P1 — LOCAL+REMOTE PASS / ACTIVE
 
 | Field | Value |
 |---|---|
@@ -54,7 +54,7 @@ Planning-документы, audits, tests, runtime data, venv и build products
 | Scope | public coupons CSV instead of TXT; one interim CSV document with event/bet statuses, realized payout and remaining ceiling; compact in-place admin card |
 | Full suite | `Ran 174 tests` / `OK` |
 | Static/sensitive verification | compile, shell syntax, diff check and sensitive scan PASS |
-| External status | pending immutable install and activation |
+| External status | immutable r1 install PASS; `Ran 174 tests` / `OK` on Python 3.13.5; digest match; activation transaction PASS; strict health green after first long-poll; control S3 backup PASS |
 
 Public group CSV files exclude Telegram, participant and match IDs, neutralize
 spreadsheet formula prefixes and remove embedded line breaks. Intermediate rank
@@ -67,6 +67,8 @@ The first immutable install ID failed its remote suite before activation because
 two new publication tests used a relative output directory under the root-owned
 release. Product runtime already uses the writable data directory. The tests now
 use isolated temporary directories; the failed ID was never activated.
+The active round remained `PILOT-20260826`; no Telegram publication was
+triggered during deployment.
 
 ## Compact publication P1 — LOCAL+REMOTE PASS / ACTIVE
 

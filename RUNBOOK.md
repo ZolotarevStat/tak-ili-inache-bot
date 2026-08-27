@@ -144,12 +144,12 @@ ssh -i ~/.ssh/<VDS_ADMIN_KEY> admin@<VDS_HOST> '
 
 ## 2. Local verification and release identity
 
-Текущий кандидат:
+Текущий **active** release:
 `0.1.0-csv-interim-p1-r1-20260827-local`; suite contract
 `Ran 174 tests` / `OK`; runtime digest ×2
 `sha256:6b070bfa3667ba4a49629fca64b0e43108dca38eb6f5e53edb5fc338929563b1`.
-До активации active VDS release остаётся
-`0.1.0-compact-publication-p1-20260827-local`. Не изменяйте current release in-place.
+Immutable r1 install, remote `174/174`, digest match, transaction, strict health
+и контрольный encrypted S3 backup выполнены. Не изменяйте current release in-place.
 
 ```bash
 cd <PROJECT_DIR>
