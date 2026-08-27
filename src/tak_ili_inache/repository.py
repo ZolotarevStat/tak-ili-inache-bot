@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from .models import BetResult, Participant, Prediction, Round
+from .models import AdminGrant, BetResult, Participant, Prediction, Round
 
 
 class Repository(ABC):
@@ -50,6 +50,18 @@ class Repository(ABC):
 
     @abstractmethod
     def participants(self) -> tuple[Participant, ...]: ...
+
+    @abstractmethod
+    def active_admin_grants(self) -> tuple[AdminGrant, ...]: ...
+
+    @abstractmethod
+    def admin_grant_revision(self, telegram_id: str) -> str: ...
+
+    @abstractmethod
+    def grant_admin(self, telegram_id: str, participant_id: str, granted_by: str, granted_at: str, expected_revision: str) -> bool: ...
+
+    @abstractmethod
+    def revoke_admin(self, telegram_id: str, revoked_by: str, revoked_at: str, expected_revision: str) -> bool: ...
 
     @abstractmethod
     def save_result(self, result: BetResult, round_id: str | None = None) -> None: ...

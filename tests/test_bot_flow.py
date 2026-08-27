@@ -19,6 +19,7 @@ class FakeTelegram:
         self.documents: list[tuple[int, str, str]] = []
         self.document_parse_modes: list[str | None] = []
         self.photos: list[tuple[int, str, str]] = []
+        self.photo_bytes: list[tuple[int, str, bytes, str]] = []
         self.edits: list[tuple[int, int, str, dict | None]] = []
         self._message_id = 0
         self.send_calls = 0
@@ -51,6 +52,10 @@ class FakeTelegram:
 
     def send_photo(self, chat_id, path, caption=""):
         self.photos.append((chat_id, path, caption))
+
+    def send_photo_bytes(self, chat_id, filename, content, caption=""):
+        self.photo_bytes.append((chat_id, filename, content, caption))
+        self.photos.append((chat_id, filename, caption))
 
 
 class BotFlowTests(unittest.TestCase):
@@ -152,12 +157,12 @@ class BotFlowTests(unittest.TestCase):
         self.assertEqual(tg.messages[-1][1], "Вы зарегистрированы. Сейчас нет открытого тура.")
         bot.handle_update({"message": {"chat": {"id": 9, "type": "private"}, "from": {"id": 99}, "text": "/admin"}})
         labels = _labels(tg.messages[-1][2])
-        self.assertEqual(labels, ["Формат и пример CSV"])
+        self.assertEqual(labels, ["Администраторы", "Формат и пример CSV"])
         self._admin_callback(bot, tg, "admin:csv-format")
         self.assertEqual(tg.documents[-1][2], "fixtures_example.csv")
         self.assertIn("round_id", tg.messages[-2][1])
         self._admin_callback(bot, tg, "admin:menu")
-        self.assertEqual(_labels(tg.messages[-1][2]), ["Формат и пример CSV"])
+        self.assertEqual(_labels(tg.messages[-1][2]), ["Администраторы", "Формат и пример CSV"])
 
     def test_admin_menu_exposes_status_publish_results_and_scoring_by_stage(self) -> None:
         repo, tg = FakeRepository(), FakeTelegram()
@@ -233,7 +238,8 @@ class BotFlowTests(unittest.TestCase):
             self.assertEqual(len(tg.documents), 4)
             self.assertTrue(all(Path(path).exists() for _, path, _ in tg.documents))
             self.assertEqual(len(tg.photos), 3)
-            self.assertTrue(all(path.endswith(".png") and Path(path).exists() for _, path, _ in tg.photos))
+            self.assertTrue(all(path.endswith(".png") for _, path, _ in tg.photos))
+            self.assertFalse(any(Path(path).exists() for _, path, _ in tg.photos), tg.photos)
             self.assertEqual(
                 {caption for _, _, caption in tg.photos},
                 {

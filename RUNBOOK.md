@@ -144,14 +144,17 @@ ssh -i ~/.ssh/<VDS_ADMIN_KEY> admin@<VDS_HOST> '
 
 ## 2. Local verification and release identity
 
-Текущий active production release:
-`0.1.0-reporting-heatmaps-excel-p1-r2-20260827-local`; suite contract
-`Ran 184 tests` / `OK`; runtime digest ×2
-`sha256:e785f6f88f6ae53aa5dc586d85af312e3d9c7ff88cec454792e5405ba27ad478`.
-R2 immutable staging, remote Python 3.13.5 suite/digest, transaction, strict
-health и encrypted S3 backups до/после activation прошли. Не изменяйте
-`current` in-place; bounded owner reporting smoke остаётся отдельной
-product-проверкой.
+Текущий active production release
+`0.1.0-admin-grants-memory-png-p1-20260828-local` имеет suite contract
+`Ran 197 tests` / `OK` и runtime digest ×2
+`sha256:f8e059cb922bb052ef9f03a4d366ac6537777d9f12f7d177ede9efd441cdc7a1`.
+Он добавляет fail-closed durable admin grants и передаёт publication PNG только
+как in-memory Telegram multipart bytes — без disk PNG и S3 registry. Не
+изменяйте `current` in-place. Immutable staging, remote Python 3.13.5 `197/197`,
+exact digest, transaction, strict health и encrypted S3 backup до/после
+activation прошли. После deploy через `/admin` откройте управление
+администраторами, выберите Vitaly и подтвердите grant; не вводите и не
+фиксируйте в документации его Telegram ID.
 не изменяйте `current` in-place. Staged
 `0.1.0-reporting-heatmaps-excel-p1-20260827-local` immutable/stale и не является
 activation target.
@@ -174,7 +177,7 @@ Sensitive scan must return no matches:
 Set the release ID after the digest is recorded in the deployment evidence:
 
 ```bash
-export TII_RELEASE_ID="0.1.0-reporting-heatmaps-excel-p1-r2-20260827-local"
+export TII_RELEASE_ID="0.1.0-admin-grants-memory-png-p1-20260828-local"
 export TII_VDS_HOST=<VDS_HOST>
 ```
 
@@ -195,7 +198,7 @@ rsync -az --delete \
 On the VDS, install and validate before switching `current`:
 
 ```bash
-export TII_RELEASE_ID="0.1.0-reporting-heatmaps-excel-p1-r2-20260827-local"
+export TII_RELEASE_ID="0.1.0-admin-grants-memory-png-p1-20260828-local"
 sudo install -d -o root -g root -m 0755 "/opt/tak-ili-inache/releases/${TII_RELEASE_ID}"
 sudo rsync -a --delete \
   "/srv/tak-ili-inache/incoming/${TII_RELEASE_ID}/" \

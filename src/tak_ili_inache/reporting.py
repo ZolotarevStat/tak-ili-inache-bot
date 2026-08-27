@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
+from io import BytesIO
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -59,6 +60,19 @@ PUBLIC_LEADERBOARD_FIELDS = (
     "single_payout",
     "express_payout",
 )
+
+
+@dataclass(frozen=True)
+class RenderedPng:
+    filename: str
+    content: bytes
+
+
+@dataclass(frozen=True)
+class ReportChartSpec:
+    revision: str
+    leaderboard_rows: tuple[dict, ...]
+    scoring_rows: tuple[dict, ...]
 
 
 @dataclass(frozen=True)
@@ -272,17 +286,14 @@ def build_popularity_chart(
     output_dir: str | Path,
     round_: Round,
     predictions: tuple[Prediction, ...],
-) -> tuple[Path, list[dict]]:
+) -> tuple[RenderedPng, list[dict]]:
+    """Render the selection chart in memory; ``output_dir`` is CSV-only legacy API context."""
+    del output_dir
     rows = selection_popularity(round_, predictions)
     revision = hashlib.sha256(
         json.dumps([SELECTION_HEATMAP_RENDER_VERSION, round_.round_id, round_.checksum, rows], ensure_ascii=False, sort_keys=True).encode()
     ).hexdigest()[:16]
-    directory = Path(output_dir) / "publication" / "bundles" / revision
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / "selection_popularity.png"
-    if not path.exists():
-        _selection_heatmap(path, round_, rows)
-    return path, rows
+    return _selection_heatmap(f"tii-selection-{revision}.png", round_, rows), rows
 
 
 def build_outcome_chart(
@@ -292,12 +303,13 @@ def build_outcome_chart(
     results: tuple[BetResult, ...],
     *,
     final: bool = False,
-) -> Path:
+) -> RenderedPng:
     """Build a result-aware counterpart of the selection heatmap.
 
     A cell keeps the original selection count, while its colour reflects the
     settled event outcome shared by every participant who chose that market.
     """
+    del output_dir
     rows = selection_popularity(round_, predictions)
     normalized_results = [
         (
@@ -315,15 +327,18 @@ def build_outcome_chart(
         ).encode()
     ).hexdigest()[:16]
     kind = "final" if final else "interim"
-    directory = Path(output_dir) / "publication" / kind / revision
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / "event_outcomes.png"
-    if not path.exists():
-        _outcome_heatmap(path, round_, rows, results, final=final)
-    return path
+    return _outcome_heatmap(f"tii-{kind}-outcomes-{revision}.png", round_, rows, results, final=final)
 
 
-def build_reports(output_dir: str | Path, round_id: str, predictions: tuple[Prediction, ...], results, participants: tuple[Participant, ...], scored_at: datetime) -> dict[str, Path]:
+def build_reports(
+    output_dir: str | Path,
+    round_id: str,
+    predictions: tuple[Prediction, ...],
+    results,
+    participants: tuple[Participant, ...],
+    scored_at: datetime,
+    include_charts: bool = True,
+) -> dict[str, Path | RenderedPng | ReportChartSpec]:
     scored, leaderboard = score_predictions(list(predictions), list(results))
     names = {item.participant_id: item.display_name for item in participants}
     by_participant = defaultdict(list)
@@ -339,25 +354,23 @@ def build_reports(output_dir: str | Path, round_id: str, predictions: tuple[Pred
     directory.mkdir(parents=True, exist_ok=True)
     revision = hashlib.sha256(json.dumps([REPORT_RENDER_VERSION, scoring_rows, leaderboard_rows, public_leaderboard_rows], ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
     bundle = directory / "bundles" / revision
-    if not bundle.exists():
-        bundle.parent.mkdir(exist_ok=True)
-        staging = Path(tempfile.mkdtemp(dir=bundle.parent, prefix=".staging-"))
-        paths = {
-            "scoring": staging / "scoring.csv",
-            "leaderboard": staging / "leaderboard.csv",
-            "public_leaderboard": staging / "final_leaderboard.csv",
-        }
-        _write_csv(paths["scoring"], scoring_rows, encoding="utf-8-sig")
-        _write_csv(paths["leaderboard"], leaderboard_rows, encoding="utf-8-sig")
-        _write_csv(paths["public_leaderboard"], public_leaderboard_rows, fieldnames=PUBLIC_LEADERBOARD_FIELDS, encoding="utf-8-sig")
-        paths.update(_charts(staging, leaderboard_rows, scoring_rows))
-        os.replace(staging, bundle)
+    bundle.mkdir(parents=True, exist_ok=True)
     paths = {
         "scoring": bundle / "scoring.csv",
         "leaderboard": bundle / "leaderboard.csv",
         "public_leaderboard": bundle / "final_leaderboard.csv",
     }
-    paths.update({"chart_leaderboard": bundle / "chart_leaderboard.png", "chart_bet_types": bundle / "chart_bet_types.png", "chart_popularity": bundle / "chart_popularity.png"})
+    if not paths["scoring"].exists():
+        _write_csv(paths["scoring"], scoring_rows, encoding="utf-8-sig")
+    if not paths["leaderboard"].exists():
+        _write_csv(paths["leaderboard"], leaderboard_rows, encoding="utf-8-sig")
+    if not paths["public_leaderboard"].exists():
+        _write_csv(paths["public_leaderboard"], public_leaderboard_rows, fieldnames=PUBLIC_LEADERBOARD_FIELDS, encoding="utf-8-sig")
+    chart_spec = ReportChartSpec(revision, tuple(leaderboard_rows), tuple(scoring_rows))
+    if include_charts:
+        paths.update(_charts(chart_spec))
+    else:
+        paths["chart_spec"] = chart_spec
     _atomic_json(directory / "current.json", {"revision": revision, "generated_at": scored_at.isoformat()})
     return paths
 
@@ -553,7 +566,7 @@ def _truncate_pixels(value: str, font: ImageFont.FreeTypeFont, max_width: int) -
     return value[:end].rstrip() + ellipsis
 
 
-def _selection_heatmap(path: Path, round_: Round, rows: list[dict]) -> None:
+def _selection_heatmap(filename: str, round_: Round, rows: list[dict]) -> RenderedPng:
     title_font, bold_font, regular_font = _fonts()
     layout = _heatmap_layout(HEATMAP_GRID_TOP, len(round_.fixtures), 40)
     image = Image.new("RGB", (layout.width, layout.height), "white")
@@ -575,17 +588,17 @@ def _selection_heatmap(path: Path, round_: Round, rows: list[dict]) -> None:
             x = layout.grid_x + column * layout.cell_width
             draw.rounded_rectangle((x, y + 5, x + layout.cell_width - 10, y + layout.row_height - 5), radius=7, fill=color)
             draw.text((_cell_text_x(x, layout.cell_width, str(value), regular_font), y + 13), str(value), font=regular_font, fill="#18212f")
-    image.save(path, format="PNG", optimize=True)
+    return RenderedPng(filename, _png_bytes(image))
 
 
 def _outcome_heatmap(
-    path: Path,
+    filename: str,
     round_: Round,
     rows: list[dict],
     results: tuple[BetResult, ...],
     *,
     final: bool,
-) -> None:
+) -> RenderedPng:
     title_font, bold_font, regular_font = _fonts()
     layout = _heatmap_layout(OUTCOME_HEATMAP_GRID_TOP, len(round_.fixtures), 54)
     image = Image.new("RGB", (layout.width, layout.height), "white")
@@ -627,7 +640,7 @@ def _outcome_heatmap(
             draw.text((_cell_text_x(x, layout.cell_width, str(value), regular_font), y + 13), str(value), font=regular_font, fill="#18212f")
     if final and len(result_by_match) != len(round_.fixtures):
         raise ValueError("final outcome heatmap requires every match result")
-    image.save(path, format="PNG", optimize=True)
+    return RenderedPng(filename, _png_bytes(image))
 
 
 def _event_outcome_status(result: BetResult | None, market: Market) -> str:
@@ -656,17 +669,20 @@ def _cell_text_x(x: int, cell_width: int, value: str, font: ImageFont.FreeTypeFo
     return int(x + (cell_width - 10 - font.getlength(value)) / 2)
 
 
-def _charts(directory: Path, leaderboard, scoring) -> dict[str, Path]:
-    series = chart_series(leaderboard, scoring)
-    charts = {
-        "chart_leaderboard": directory / "chart_leaderboard.png",
-        "chart_bet_types": directory / "chart_bet_types.png",
-        "chart_popularity": directory / "chart_popularity.png",
-    }
-    _bar_chart(charts["chart_leaderboard"], "Рейтинг валовых выплат", series["chart_leaderboard"], bold_labels=True)
-    _bar_chart(charts["chart_bet_types"], "Выплаты: ординары и экспрессы", series["chart_bet_types"])
-    _bar_chart(charts["chart_popularity"], "Популярность событий / банк", series["chart_popularity"])
-    return charts
+def _charts(spec: ReportChartSpec) -> dict[str, RenderedPng]:
+    return {key: render_report_chart(spec, key) for key in ("chart_leaderboard", "chart_bet_types", "chart_popularity")}
+
+
+def render_report_chart(spec: ReportChartSpec, key: str) -> RenderedPng:
+    series = chart_series(list(spec.leaderboard_rows), list(spec.scoring_rows))
+    revision = spec.revision
+    if key == "chart_leaderboard":
+        return _bar_chart(f"tii-leaderboard-{revision}.png", "Рейтинг валовых выплат", series[key], bold_labels=True)
+    if key == "chart_bet_types":
+        return _bar_chart(f"tii-bet-types-{revision}.png", "Выплаты: ординары и экспрессы", series[key])
+    if key == "chart_popularity":
+        return _bar_chart(f"tii-event-popularity-{revision}.png", "Популярность событий / банк", series[key])
+    raise ValueError("Unknown report chart.")
 
 
 def chart_series(leaderboard: list[dict], scoring: list[dict]) -> dict[str, list[tuple[str, int]]]:
@@ -688,7 +704,13 @@ def chart_series(leaderboard: list[dict], scoring: list[dict]) -> dict[str, list
     }
 
 
-def _bar_chart(path: Path, title: str, values: list[tuple[str, int]], *, bold_labels: bool = False) -> None:
+def _bar_chart(
+    filename: str,
+    title: str,
+    values: list[tuple[str, int]],
+    *,
+    bold_labels: bool = False,
+) -> RenderedPng:
     """Dependency-minimal raster bar chart with a Unicode font present on Ubuntu 24.04."""
     height, width, top = max(220, 100 + len(values) * 42), 1200, 72
     maximum = max((value for _, value in values), default=1) or 1
@@ -703,7 +725,13 @@ def _bar_chart(path: Path, title: str, values: list[tuple[str, int]], *, bold_la
         bar = int(620 * value / maximum)
         draw.rounded_rectangle((430, y, 430 + bar, y + 28), radius=5, fill="#276ef1")
         draw.text((442 + bar, y + 5), str(value), font=regular_font, fill="#18212f")
-    image.save(path, format="PNG", optimize=True)
+    return RenderedPng(filename, _png_bytes(image))
+
+
+def _png_bytes(image: Image.Image) -> bytes:
+    buffer = BytesIO()
+    image.save(buffer, format="PNG", optimize=True)
+    return buffer.getvalue()
 
 
 def _fonts() -> tuple[ImageFont.FreeTypeFont, ImageFont.FreeTypeFont, ImageFont.FreeTypeFont]:

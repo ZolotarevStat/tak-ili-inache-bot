@@ -6,21 +6,29 @@
 |---|---|
 | Package | `tak-ili-inache-bot` |
 | Version | `0.1.0` |
-| Release status | `REPORTING/EXCEL/PRIVACY P1 R2 ACTIVE / PRODUCTION ACTIVATION PASS` |
-| Open gate | bounded owner reporting smoke |
+| Release status | `ADMIN GRANTS / IN-MEMORY PNG P1 ACTIVE / PRODUCTION ACTIVATION GO` |
+| Open gate | owner grants Vitaly through `/admin` and performs bounded reporting smoke |
 | Application MVP baseline commit | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` |
 | S3/infra publication commit | `4a3540f98f6c310c7a842caaf9679218802b15a0` |
 | Active application feature commit | `9f8c0be` on `feature/group-admin-ux-p1` |
-| Release ID | `0.1.0-reporting-heatmaps-excel-p1-r2-20260827-local` |
-| Local verification at | `2026-08-27, publish-v7/interim-v7/score-v4, 184-test local package GO` |
+| Release ID | `0.1.0-admin-grants-memory-png-p1-20260828-local` |
+| Local verification at | `2026-08-28, admin grants/CAS/in-memory PNG, 197-test local package GO` |
 | Python | `3.12.7` local; `3.13.5` VDS |
-| Candidate runtime digest ×2 | `sha256:e785f6f88f6ae53aa5dc586d85af312e3d9c7ff88cec454792e5405ba27ad478` |
-| Active VDS release | `0.1.0-reporting-heatmaps-excel-p1-r2-20260827-local` |
+| Candidate runtime digest ×2 | `sha256:f8e059cb922bb052ef9f03a4d366ac6537777d9f12f7d177ede9efd441cdc7a1` |
+| Active VDS release | `0.1.0-admin-grants-memory-png-p1-20260828-local` |
 
-The r2 reporting/Excel/privacy release completed immutable staging, remote
-Python 3.13.5 suite/digest verification, transactional activation, strict health
-and encrypted S3 backups before and after activation. Active round data was
-preserved. The bounded owner reporting smoke remains the only product check.
+The audited local candidate adds durable fail-closed admin grants (UI, CAS,
+state-machine and migration) and PNG publication as in-memory bytes sent only
+through Telegram multipart. It never writes PNGs to disk or an S3 registry;
+existing CSV, delivery, scoring and reporting semantics are preserved. The
+independent audit found no P0/P1; focused `26/26` and full `197/197` passed.
+Immutable staging and activation succeeded. The deployed worker has PID `69581`,
+`NRestarts=0`, strict health green and memory about `19.3 MiB`. The pre-activation
+encrypted snapshot completed at `2026-08-28 02:14:39 MSK`; post-activation backup
+and freshness completed at `02:16:43–02:16:47 MSK`. Active round data was
+preserved. The remaining owner action is to grant Vitaly via the `/admin`
+administrator-management flow; no Telegram ID is recorded here.
+
 The earlier staged `0.1.0-reporting-heatmaps-excel-p1-20260827-local` is
 immutable and stale and is **not** an activation target. Active round data is
 outside this package step.
@@ -47,16 +55,29 @@ release surface: `pyproject.toml`, `Dockerfile`, `src/tak_ili_inache/` и `deplo
 Planning-документы, audits, tests, runtime data, venv и build products не могут
 изменить этот digest. Он воспроизводимо рассчитан дважды с идентичным результатом.
 
-## Reporting heatmaps, Excel and privacy P1 r2 — LOCAL+REMOTE PASS / ACTIVE
+## Admin grants and in-memory PNG P1 — LOCAL+REMOTE PASS / ACTIVE
 
 | Field | Value |
 |---|---|
-| Release ID | `0.1.0-reporting-heatmaps-excel-p1-r2-20260827-local` |
-| Runtime digest ×2 | `sha256:e785f6f88f6ae53aa5dc586d85af312e3d9c7ff88cec454792e5405ba27ad478` |
-| Scope | pixel-safe label/grid layout and blank outcome captions; publish-v7/interim-v7/score-v4 reporting delta |
-| Full suite | `Ran 184 tests` / `OK`; targeted runtime GO `29/29`, P0/P1 findings 0 |
-| Local verification | compile, shell syntax, diff check and sensitive/forbidden scan PASS |
-| External status | immutable staging and Python 3.13.5 `184/184`, exact digest, transaction and strict health PASS; encrypted S3 backups before/after activation PASS; owner reporting smoke remains open |
+| Release ID | `0.1.0-admin-grants-memory-png-p1-20260828-local` |
+| Runtime digest ×2 | `sha256:f8e059cb922bb052ef9f03a4d366ac6537777d9f12f7d177ede9efd441cdc7a1` |
+| Scope | durable admin-grants UI/CAS/state-machine/migration fail-closed; publication PNG is Telegram multipart in-memory bytes only |
+| Full suite | `Ran 197 tests` / `OK`; focused audit `26/26`, no P0/P1 findings |
+| Local verification | full and clean-env suites, compile, shell syntax, diff check, sensitive/forbidden scan, digest ×2 and package self-check PASS; `systemd-analyze` unavailable locally |
+| External status | immutable staging and Python 3.13.5 `197/197`, exact digest, transaction and strict health PASS; encrypted S3 backup before activation plus post-activation backup/freshness PASS; owner grant/reporting smoke remains open |
+
+Disk hygiene evidence from the independent audit: release/data pruning reduced
+the local disk set from `34` to `3`, freeing about `729 MiB`; production disk
+usage is `43%`. CJM review found no new P0. Follow-ups are P1: admin-stage copy,
+interim revision status, and N–M wording in the outcome heatmap; P2 is gated by
+feedback.
+
+## Reporting heatmaps, Excel and privacy P1 r2 — ACTIVE PRODUCTION BASELINE
+
+`0.1.0-reporting-heatmaps-excel-p1-r2-20260827-local` remains the active VDS
+release with digest `sha256:e785f6f88f6ae53aa5dc586d85af312e3d9c7ff88cec454792e5405ba27ad478`.
+Its recorded remote verification and activation evidence is historical r2
+evidence only and does not verify the new local candidate.
 
 ## Historical production baseline — reporting/Excel/privacy r1
 

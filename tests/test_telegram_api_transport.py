@@ -85,6 +85,7 @@ class TelegramApiTransportTests(unittest.TestCase):
             _Response(200, b"csv-bytes"),
             _Response(200, b'{"ok":true,"result":true}'),
             _Response(200, b'{"ok":true,"result":true}'),
+            _Response(200, b'{"ok":true,"result":true}'),
         ])
         with tempfile.TemporaryDirectory() as directory:
             artifact = Path(directory) / "chart.png"
@@ -97,12 +98,24 @@ class TelegramApiTransportTests(unittest.TestCase):
             self.assertEqual(api.download_document({"file_id": "document-id"}), b"csv-bytes")
             api.send_document(42, str(artifact), "caption")
             api.send_photo(42, str(artifact), "caption")
-        self.assertEqual(connector.hosts, ["api.telegram.org"] * 9)
-        self.assertEqual([request[0] for request in factory.requests], ["POST", "POST", "POST", "POST", "POST", "POST", "GET", "POST", "POST"])
+            api.send_photo_bytes(42, "in-memory.png", b"PNG-BYTES", "caption")
+        self.assertEqual(connector.hosts, ["api.telegram.org"] * 10)
+        self.assertEqual([request[0] for request in factory.requests], ["POST", "POST", "POST", "POST", "POST", "POST", "GET", "POST", "POST", "POST"])
         paths = [request[1].rsplit("/", 1)[-1] for request in factory.requests]
-        self.assertEqual(paths, ["getUpdates", "sendMessage", "answerCallbackQuery", "editMessageReplyMarkup", "editMessageText", "getFile", "a.csv", "sendDocument", "sendPhoto"])
+        self.assertEqual(paths, ["getUpdates", "sendMessage", "answerCallbackQuery", "editMessageReplyMarkup", "editMessageText", "getFile", "a.csv", "sendDocument", "sendPhoto", "sendPhoto"])
         self.assertTrue(all(request[4] is not None for request in factory.requests))
         self.assertIn(b'name="photo"', factory.requests[-1][2])
+        self.assertIn(b'filename="in-memory.png"', factory.requests[-1][2])
+        self.assertIn(b"Content-Type: image/png", factory.requests[-1][2])
+        self.assertIn(b"PNG-BYTES", factory.requests[-1][2])
+
+    def test_photo_bytes_upload_needs_no_local_file(self):
+        api, _connector, factory = self._api([_Response(200, b'{"ok":true,"result":true}')])
+        image = b"\x89PNG\r\n\x1a\nbytes-only"
+        api.send_photo_bytes(42, "rendered.png", image, "")
+        body = factory.requests[0][2]
+        self.assertIn(b'filename="rendered.png"', body)
+        self.assertIn(image, body)
 
     def test_document_html_parse_mode_is_opt_in_and_encoded_as_multipart_field(self):
         api, _connector, factory = self._api([_Response(200, b'{"ok":true,"result":true}')])

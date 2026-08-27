@@ -38,6 +38,7 @@ class _Telegram:
     def download_document(self, *args): return b""
     def send_document(self, *args): return None
     def send_photo(self, *args): return None
+    def send_photo_bytes(self, *args): return None
 
 
 class DurableDraftTests(unittest.TestCase):

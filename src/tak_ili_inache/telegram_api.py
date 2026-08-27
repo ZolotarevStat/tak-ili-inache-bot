@@ -27,6 +27,7 @@ class TelegramClient(Protocol):
     def download_document(self, document: dict[str, Any]) -> bytes: ...
     def send_document(self, chat_id: int, path: str, caption: str = "", parse_mode: str | None = None) -> None: ...
     def send_photo(self, chat_id: int, path: str, caption: str = "") -> None: ...
+    def send_photo_bytes(self, chat_id: int, filename: str, content: bytes, caption: str = "") -> None: ...
 
 
 class TelegramHttpError(RuntimeError):
@@ -98,6 +99,10 @@ class TelegramApi:
     def send_photo(self, chat_id: int, path: str, caption: str = "") -> None:
         self._deliver(lambda: self._upload("sendPhoto", "photo", chat_id, path, caption))
 
+    def send_photo_bytes(self, chat_id: int, filename: str, content: bytes, caption: str = "") -> None:
+        """Upload a rendered image without creating a filesystem artifact."""
+        self._deliver(lambda: self._upload_bytes("sendPhoto", "photo", chat_id, filename, content, caption))
+
     def _deliver(self, operation: Callable[[], Any]) -> Any:
         attempt = 0
 
@@ -122,9 +127,21 @@ class TelegramApi:
     def _upload(
         self, method: str, field: str, chat_id: int, path: str, caption: str, *, parse_mode: str | None = None
     ) -> None:
+        source = Path(path)
+        self._upload_bytes(method, field, chat_id, source.name, source.read_bytes(), caption, parse_mode=parse_mode)
+
+    def _upload_bytes(
+        self,
+        method: str,
+        field: str,
+        chat_id: int,
+        filename: str,
+        content: bytes,
+        caption: str,
+        *,
+        parse_mode: str | None = None,
+    ) -> None:
         boundary = uuid.uuid4().hex
-        filename = Path(path).name
-        content = Path(path).read_bytes()
         parts = [
             f"--{boundary}\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n{chat_id}\r\n".encode(),
             f"--{boundary}\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\n{caption}\r\n".encode(),

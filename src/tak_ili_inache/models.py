@@ -121,3 +121,13 @@ class Participant:
     participant_id: str
     telegram_id: str
     display_name: str
+
+
+@dataclass(frozen=True)
+class AdminGrant:
+    """Current active runtime grant; audit history stays in ``admin_grants.csv``."""
+    telegram_id: str
+    participant_id: str
+    granted_by: str
+    granted_at: str
+    revision: str

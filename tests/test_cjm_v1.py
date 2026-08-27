@@ -19,6 +19,7 @@ class Telegram:
     def download_document(self, *_): return b""
     def send_document(self, *_): return None
     def send_photo(self, *_): return None
+    def send_photo_bytes(self, *_): return None
 
 
 class CjmV1Tests(unittest.TestCase):

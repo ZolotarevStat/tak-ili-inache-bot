@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from io import BytesIO
 import multiprocessing
 import os
 import re
@@ -220,11 +221,11 @@ class ReleaseOperationsTests(unittest.TestCase):
             )
             for key in ("chart_leaderboard", "chart_bet_types", "chart_popularity"):
                 chart = paths[key]
-                self.assertEqual(chart.suffix, ".png")
-                self.assertEqual(chart.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
-                with Image.open(chart) as image:
+                self.assertTrue(chart.filename.endswith(".png"))
+                self.assertEqual(chart.content[:8], b"\x89PNG\r\n\x1a\n")
+                with Image.open(BytesIO(chart.content)) as image:
                     image.verify()
-                with Image.open(chart) as image:
+                with Image.open(BytesIO(chart.content)) as image:
                     self.assertGreater(image.width, 0)
                     self.assertGreater(image.height, 0)
 
@@ -236,9 +237,9 @@ class ReleaseOperationsTests(unittest.TestCase):
         manifest_id = re.search(r"^\| Release ID \| `([^`]+)` \|$", manifest, re.MULTILINE)
         self.assertIsNotNone(manifest_id)
         candidate_id = manifest_id.group(1)
-        self.assertEqual(candidate_id, "0.1.0-reporting-heatmaps-excel-p1-r2-20260827-local")
+        self.assertEqual(candidate_id, "0.1.0-admin-grants-memory-png-p1-20260828-local")
         stale_id = "0.1.0-reporting-heatmaps-excel-p1-20260827-local"
-        active_baseline = "0.1.0-reporting-heatmaps-excel-p1-r2-20260827-local"
+        active_baseline = "0.1.0-admin-grants-memory-png-p1-20260828-local"
         exported_ids = re.findall(r'^export TII_RELEASE_ID="([^"]+)"$', runbook, re.MULTILINE)
         self.assertEqual(len(exported_ids), 2)
         self.assertTrue(all(item == candidate_id for item in exported_ids))
@@ -249,7 +250,7 @@ class ReleaseOperationsTests(unittest.TestCase):
         manifest_digest = re.search(r"^\| Candidate runtime digest ×2 \| `(sha256:[0-9a-f]{64})` \|$", manifest, re.MULTILINE)
         self.assertIsNotNone(manifest_digest)
         runtime_digest = manifest_digest.group(1)
-        test_count = 184
+        test_count = 197
         self.assertNotIn("--no-build-isolation", runbook)
         for artifact in (manifest, smoke, runbook):
             self.assertIn(candidate_id, artifact)

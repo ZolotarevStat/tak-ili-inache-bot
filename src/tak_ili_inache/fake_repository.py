@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from .models import BetResult, Participant, Prediction, Round
+from .models import AdminGrant, BetResult, Participant, Prediction, Round
 from .repository import Repository
 
 
@@ -18,6 +18,9 @@ class FakeRepository(Repository):
         self._results: dict[str, BetResult] = {}
         self._update_ids: set[str] = set()
         self._operations: dict[str, str] = {}
+        self._admin_grants: dict[str, AdminGrant] = {}
+        self._admin_grant_revisions: dict[str, str] = {}
+        self._admin_grant_event_no = 0
 
     def save_round(self, round_: Round, actor_id: str = "", imported_at: str = "") -> None:
         active = self.get_active_round()
@@ -84,6 +87,31 @@ class FakeRepository(Repository):
 
     def participants(self) -> tuple[Participant, ...]:
         return tuple(self._participants.values())
+
+    def active_admin_grants(self) -> tuple[AdminGrant, ...]:
+        return tuple(self._admin_grants.values())
+
+    def admin_grant_revision(self, telegram_id: str) -> str:
+        return self._admin_grant_revisions.get(telegram_id, "none")
+
+    def _next_admin_grant_revision(self) -> str:
+        self._admin_grant_event_no += 1
+        return f"event-{self._admin_grant_event_no}"
+
+    def grant_admin(self, telegram_id: str, participant_id: str, granted_by: str, granted_at: str, expected_revision: str) -> bool:
+        if self.admin_grant_revision(telegram_id) != expected_revision or telegram_id in self._admin_grants:
+            return False
+        revision = self._next_admin_grant_revision()
+        self._admin_grant_revisions[telegram_id] = revision
+        self._admin_grants[telegram_id] = AdminGrant(telegram_id, participant_id, granted_by, granted_at, revision)
+        return True
+
+    def revoke_admin(self, telegram_id: str, revoked_by: str, revoked_at: str, expected_revision: str) -> bool:
+        if self.admin_grant_revision(telegram_id) != expected_revision or telegram_id not in self._admin_grants:
+            return False
+        self._admin_grants.pop(telegram_id)
+        self._admin_grant_revisions[telegram_id] = self._next_admin_grant_revision()
+        return True
 
     def save_result(self, result: BetResult, round_id: str | None = None) -> None:
         scoped_round = round_id or (self.get_active_round().round_id if self.get_active_round() else "")

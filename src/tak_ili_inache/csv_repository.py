@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import os
+import secrets
 import tempfile
 from contextlib import contextmanager
 from datetime import datetime
@@ -11,10 +13,15 @@ from pathlib import Path
 from typing import Iterator
 from zoneinfo import ZoneInfo
 
-from .models import Bet, BetEvent, BetResult, BetType, Fixture, Market, Participant, Prediction, Round
+from .models import AdminGrant, Bet, BetEvent, BetResult, BetType, Fixture, Market, Participant, Prediction, Round
 from .repository import Repository
 
 MOSCOW = ZoneInfo("Europe/Moscow")
+_ADMIN_GRANT_FIELDS = {
+    "event_id", "grant_event_id", "telegram_id", "participant_id", "action", "granted_by", "granted_at", "revoked_by", "revoked_at", "active"
+}
+_PREVIOUS_ADMIN_GRANT_FIELDS = _ADMIN_GRANT_FIELDS - {"grant_event_id"}
+_LEGACY_ADMIN_GRANT_FIELDS = _PREVIOUS_ADMIN_GRANT_FIELDS - {"event_id"}
 
 
 class CsvRepository(Repository):
@@ -139,6 +146,73 @@ class CsvRepository(Repository):
     def participants(self) -> tuple[Participant, ...]:
         return tuple(Participant(item["participant_id"], item["telegram_id"], item["display_name"]) for item in self._read_rows("participants.csv"))
 
+    def active_admin_grants(self) -> tuple[AdminGrant, ...]:
+        participants = {row["telegram_id"]: row["participant_id"] for row in self._read_rows("participants.csv")}
+        current = self._validated_admin_grant_rows(self._read_admin_grant_rows(), participants)
+        return tuple(
+            AdminGrant(row["telegram_id"], row["participant_id"], row["granted_by"], row["granted_at"], row["event_id"])
+            for row in current.values()
+            if row["active"] == "true"
+        )
+
+    def admin_grant_revision(self, telegram_id: str) -> str:
+        participants = {row["telegram_id"]: row["participant_id"] for row in self._read_rows("participants.csv")}
+        current = self._validated_admin_grant_rows(self._read_admin_grant_rows(), participants)
+        return current.get(telegram_id, {}).get("event_id", "none")
+
+    def grant_admin(self, telegram_id: str, participant_id: str, granted_by: str, granted_at: str, expected_revision: str) -> bool:
+        with self._locked():
+            participants = {row["telegram_id"]: row["participant_id"] for row in self._read_rows("participants.csv")}
+            if participants.get(telegram_id) != participant_id:
+                raise ValueError("Admin grant target is not a registered participant.")
+            rows = self._read_admin_grant_rows()
+            current = self._validated_admin_grant_rows(rows, participants)
+            previous = current.get(telegram_id)
+            if (previous.get("event_id") if previous else "none") != expected_revision or (previous and previous["active"] == "true"):
+                return False
+            event_id = secrets.token_hex(16)
+            rows.append(
+                {
+                    "event_id": event_id,
+                    "grant_event_id": event_id,
+                    "telegram_id": telegram_id,
+                    "participant_id": participant_id,
+                    "action": "grant",
+                    "granted_by": granted_by,
+                    "granted_at": granted_at,
+                    "revoked_by": "",
+                    "revoked_at": "",
+                    "active": "true",
+                }
+            )
+            self._write_rows("admin_grants.csv", rows)
+            return True
+
+    def revoke_admin(self, telegram_id: str, revoked_by: str, revoked_at: str, expected_revision: str) -> bool:
+        with self._locked():
+            rows = self._read_admin_grant_rows()
+            participants = {row["telegram_id"]: row["participant_id"] for row in self._read_rows("participants.csv")}
+            current = self._validated_admin_grant_rows(rows, participants)
+            previous = current.get(telegram_id)
+            if not previous or previous.get("event_id") != expected_revision or previous.get("active") != "true":
+                return False
+            rows.append(
+                {
+                    "event_id": secrets.token_hex(16),
+                    "grant_event_id": previous["event_id"],
+                    "telegram_id": telegram_id,
+                    "participant_id": previous["participant_id"],
+                    "action": "revoke",
+                    "granted_by": previous["granted_by"],
+                    "granted_at": previous["granted_at"],
+                    "revoked_by": revoked_by,
+                    "revoked_at": revoked_at,
+                    "active": "false",
+                }
+            )
+            self._write_rows("admin_grants.csv", rows)
+            return True
+
     def save_result(self, result: BetResult, round_id: str | None = None) -> None:
         with self._locked():
             scoped_round = round_id or (self.get_active_round().round_id if self.get_active_round() else "")
@@ -209,6 +283,7 @@ class CsvRepository(Repository):
             expected = list(expected_by_key.values())
             if self._read_rows("submissions_latest.csv") != expected:
                 self._write_rows("submissions_latest.csv", expected)
+            self._recover_admin_grant_log()
             rounds = self._read_rows("rounds.csv")
             migrated_rounds = []
             for row in rounds:
@@ -234,6 +309,39 @@ class CsvRepository(Repository):
                 if not any(item["action"] == "round_activated" and item["round_id"] == round_row["round_id"] and item["checksum"] == round_row["checksum"] for item in audits):
                     self._append_audit("round_activated_recovered", round_row["round_id"], "", "", round_row["checksum"])
             self._recover_close_intents()
+
+    def _recover_admin_grant_log(self) -> None:
+        rows = self._read_admin_grant_rows()
+        if not rows:
+            return
+        participants = {row["telegram_id"]: row["participant_id"] for row in self._read_rows("participants.csv")}
+        if all(set(row) == _LEGACY_ADMIN_GRANT_FIELDS for row in rows):
+            migrated = self._migrate_admin_grant_rows(rows, add_event_ids=True)
+            self._validated_admin_grant_rows(migrated, participants)
+            self._write_rows("admin_grants.csv", migrated)
+            return
+        if all(set(row) == _PREVIOUS_ADMIN_GRANT_FIELDS for row in rows):
+            migrated = self._migrate_admin_grant_rows(rows, add_event_ids=False)
+            self._validated_admin_grant_rows(migrated, participants)
+            self._write_rows("admin_grants.csv", migrated)
+            return
+        self._validated_admin_grant_rows(rows, participants)
+
+    @staticmethod
+    def _migrate_admin_grant_rows(rows: list[dict[str, str]], *, add_event_ids: bool) -> list[dict[str, str]]:
+        """Upgrade historical logs by pinning every revoke to its grant event."""
+        current: dict[str, dict[str, str]] = {}
+        migrated: list[dict[str, str]] = []
+        for index, original in enumerate(rows):
+            row = dict(original)
+            if add_event_ids:
+                seed = json.dumps(["legacy-admin-grant-v1", index, original], ensure_ascii=False, sort_keys=True).encode("utf-8")
+                row["event_id"] = "legacy-" + hashlib.sha256(seed).hexdigest()[:24]
+            previous = current.get(row.get("telegram_id", ""))
+            row["grant_event_id"] = row["event_id"] if row.get("action") == "grant" else (previous or {}).get("event_id", "")
+            migrated.append(row)
+            current[row.get("telegram_id", "")] = row
+        return migrated
 
     @staticmethod
     def _close_intent(round_id: str, checksum: str, actor_id: str, closed_at: str) -> dict[str, str]:
@@ -287,6 +395,76 @@ class CsvRepository(Repository):
         rows = self._read_rows("audit_log.csv")
         rows.append({"action": action, "round_id": round_id, "actor_id": actor_id, "timestamp": timestamp, "checksum": checksum, "line_version": checksum[:12]})
         self._write_rows("audit_log.csv", rows)
+
+    @staticmethod
+    def _validated_admin_grant_rows(
+        rows: list[dict[str, str]], participants: dict[str, str]
+    ) -> dict[str, dict[str, str]]:
+        """Validate the entire append-only permission state machine.
+
+        The last row alone is insufficient: an invalid historical transition
+        could otherwise be used to make a later active row appear trusted.
+        """
+        current: dict[str, dict[str, str]] = {}
+        event_ids: set[str] = set()
+        for row in rows:
+            if set(row) != _ADMIN_GRANT_FIELDS:
+                raise ValueError("Invalid admin grant row.")
+            event_id = row["event_id"]
+            telegram_id = row["telegram_id"]
+            participant_id = row["participant_id"]
+            action = row["action"]
+            if not event_id or event_id in event_ids or not telegram_id or not participant_id:
+                raise ValueError("Invalid admin grant event identity.")
+            event_ids.add(event_id)
+            if participants.get(telegram_id) != participant_id:
+                raise ValueError("Admin grant target is not a registered participant.")
+            previous = current.get(telegram_id)
+            if action == "grant":
+                if (
+                    row["active"] != "true"
+                    or row["grant_event_id"] != event_id
+                    or not row["granted_by"]
+                    or not row["granted_at"]
+                    or row["revoked_by"]
+                    or row["revoked_at"]
+                    or (previous is not None and previous["active"] == "true")
+                ):
+                    raise ValueError("Invalid admin grant transition.")
+            elif action == "revoke":
+                if (
+                    row["active"] != "false"
+                    or not row["revoked_by"]
+                    or not row["revoked_at"]
+                    or previous is None
+                    or previous["active"] != "true"
+                    or previous["action"] != "grant"
+                    or row["grant_event_id"] != previous["event_id"]
+                    or row["participant_id"] != previous["participant_id"]
+                    or row["granted_by"] != previous["granted_by"]
+                    or row["granted_at"] != previous["granted_at"]
+                ):
+                    raise ValueError("Invalid admin revoke transition.")
+            else:
+                raise ValueError("Invalid admin grant action.")
+            current[telegram_id] = row
+        return current
+
+    def _read_admin_grant_rows(self) -> list[dict[str, str]]:
+        return self._read_rows_with_headers(
+            "admin_grants.csv", _ADMIN_GRANT_FIELDS, _PREVIOUS_ADMIN_GRANT_FIELDS, _LEGACY_ADMIN_GRANT_FIELDS
+        )
+
+    def _read_rows_with_headers(self, name: str, *allowed_headers: set[str]) -> list[dict[str, str]]:
+        path = self.directory / name
+        if not path.exists() or path.stat().st_size == 0:
+            return []
+        with path.open(encoding="utf-8", newline="") as source:
+            reader = csv.DictReader(source)
+            header = set(reader.fieldnames or ())
+            if not any(header == allowed for allowed in allowed_headers):
+                raise ValueError(f"Invalid {name} header.")
+            return list(reader)
 
     def _read_rows(self, name: str) -> list[dict[str, str]]:
         path = self.directory / name

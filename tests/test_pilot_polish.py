@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from io import BytesIO
 import re
 import tempfile
 import unittest
@@ -122,8 +123,10 @@ class PilotPolishTests(unittest.TestCase):
             self.assertNotIn("participant_id", coupons)
             self.assertNotIn("telegram_id", coupons)
             self.assertEqual(len(tg.photos), 1)
-            chart = Path(tg.photos[0][1])
-            self.assertEqual(chart.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+            chart_name = tg.photos[0][1]
+            self.assertTrue(chart_name.endswith(".png"))
+            self.assertEqual(tg.photo_bytes[0][2][:8], b"\x89PNG\r\n\x1a\n")
+            self.assertTrue(path.exists())
             caption = tg.photos[0][2]
             self.assertEqual(len(re.findall(r"(?m)^\d+\. ", caption)), 10)
             self.assertNotRegex(caption, r"\bM\d{2}\b")
@@ -143,9 +146,9 @@ class PilotPolishTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as output:
             prediction = self._prediction("player", (Market.P1,) * 6)
-            path, _ = build_popularity_chart(output, self.round_, (prediction,))
-            self.assertEqual(path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
-            with Image.open(path) as image:
+            chart, _ = build_popularity_chart(output, self.round_, (prediction,))
+            self.assertEqual(chart.content[:8], b"\x89PNG\r\n\x1a\n")
+            with Image.open(BytesIO(chart.content)) as image:
                 self.assertLessEqual(image.width, 900)
                 self.assertLessEqual(image.height, 900)
 
@@ -187,8 +190,8 @@ class PilotPolishTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as output:
             selection, _ = build_popularity_chart(output, long_round, (prediction,))
             outcome = build_outcome_chart(output, long_round, (prediction,), results)
-            for path in (selection, outcome):
-                with Image.open(path) as image:
+            for chart in (selection, outcome):
+                with Image.open(BytesIO(chart.content)) as image:
                     self.assertLessEqual(image.width, 900)
                     self.assertLessEqual(image.height, 900)
 
@@ -203,8 +206,8 @@ class PilotPolishTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as output:
             interim = build_outcome_chart(output, self.round_, (prediction,), results)
-            self.assertEqual(interim.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
-            with Image.open(interim) as image:
+            self.assertEqual(interim.content[:8], b"\x89PNG\r\n\x1a\n")
+            with Image.open(BytesIO(interim.content)) as image:
                 image.verify()
             self.assertEqual(_outcome_cell_color("pending", 0), PENDING_OUTCOME_COLOR)
             self.assertNotEqual(_outcome_cell_color("won", 0), PENDING_OUTCOME_COLOR)
@@ -215,7 +218,7 @@ class PilotPolishTests(unittest.TestCase):
             self.assertLess(HEATMAP_SUBTITLE_Y + regular_font.getbbox("Тур R1: число выборов; цвет показывает исход события")[3], OUTCOME_HEATMAP_LEGEND_Y)
             self.assertLess(OUTCOME_HEATMAP_LEGEND_Y + regular_font.getbbox("ожидается")[3], OUTCOME_HEATMAP_HEADER_Y)
             self.assertLess(OUTCOME_HEATMAP_HEADER_Y + bold_font.getbbox("П1")[3], OUTCOME_HEATMAP_GRID_TOP)
-            with Image.open(interim) as image:
+            with Image.open(BytesIO(interim.content)) as image:
                 # M01/P1: settled and selected; M01/P2: settled but unselected;
                 # M03/P1: returned but unselected; M04/P1: genuinely pending.
                 cell = lambda row, column: image.getpixel((

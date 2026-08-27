@@ -11,13 +11,17 @@ export TELEGRAM_BOT_TOKEN='<TEST_BOT_TOKEN>'
 PYTHONPATH=src python3 -m tak_ili_inache.polling
 ```
 
-Локальный suite перед smoke должен завершиться как `Ran 184 tests` и `OK`.
-Текущий active production release:
-`0.1.0-reporting-heatmaps-excel-p1-r2-20260827-local`, runtime digest ×2
-`sha256:e785f6f88f6ae53aa5dc586d85af312e3d9c7ff88cec454792e5405ba27ad478`.
-Для r2 immutable staging, remote suite/digest, transactional activation, strict
-health и encrypted S3 backups до/после activation прошли. Bounded owner
-reporting smoke остаётся отдельной product-проверкой.
+Локальный suite перед smoke active production release завершился как
+`Ran 197 tests` и `OK`. Новый candidate
+`0.1.0-admin-grants-memory-png-p1-20260828-local`, runtime digest ×2
+`sha256:f8e059cb922bb052ef9f03a4d366ac6537777d9f12f7d177ede9efd441cdc7a1`,
+включает fail-closed durable admin grants и отправляет publication PNG только
+как in-memory Telegram multipart bytes: disk PNG и S3 registry отсутствуют.
+Immutable staging, remote Python 3.13.5 `197/197`, exact digest, transaction,
+strict health и encrypted S3 backup до/после activation прошли. Owner action:
+через `/admin` открыть управление администраторами, выбрать Vitaly и
+подтвердить grant; Telegram ID не фиксировать. Bounded reporting smoke остаётся
+отдельной product-проверкой.
 Staged `0.1.0-reporting-heatmaps-excel-p1-20260827-local` immutable/stale и не
 может быть activation target.
 

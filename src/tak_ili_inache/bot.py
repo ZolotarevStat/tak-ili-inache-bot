@@ -24,6 +24,7 @@ from .reporting import (
     build_predictions_export,
     build_public_coupons_csv,
     build_reports,
+    render_report_chart,
 )
 from .presentation import compact_match_label, public_event_label
 from .repository import Repository
@@ -124,6 +125,10 @@ class BotService:
         # round revision and a short one-shot token.  They are not Telegram
         # identifiers and are never persisted or shown in copy.
         self.pending_closures: dict[str, tuple[str, str, str]] = {}
+        # Opaque, process-local confirmation tokens.  They deliberately keep
+        # Telegram identifiers out of callback_data and invalidate on every
+        # management screen redraw.
+        self.pending_admin_actions: dict[str, dict[str, tuple[str, str, str]]] = {}
         self.result_drafts: dict[tuple[str, str], ResultScoreDraft] = {}
         self._pending_outbox_tokens: dict[tuple[str, str], str] = {}
         self.draft_store = draft_store
@@ -288,6 +293,16 @@ class BotService:
             self._admin_menu(chat_id, telegram_id, message.get("message_id"))
         elif data == "admin:csv-format":
             self._csv_format(chat_id, telegram_id)
+        elif data == "admin:admins":
+            self._admin_management(chat_id, telegram_id, message.get("message_id"))
+        elif data.startswith("admin:admins:add:"):
+            self._admin_add_candidates(chat_id, telegram_id, message.get("message_id"), data.rsplit(":", 1)[-1])
+        elif data == "admin:admins:revoke":
+            self._admin_revoke_candidates(chat_id, telegram_id, message.get("message_id"))
+        elif data.startswith("admin:admins:select:"):
+            self._admin_action_selected(chat_id, telegram_id, message.get("message_id"), data.rsplit(":", 1)[-1])
+        elif data.startswith("admin:admins:confirm:"):
+            self._admin_action_confirmed(chat_id, telegram_id, message.get("message_id"), data.rsplit(":", 1)[-1])
         elif data == "back":
             self._back(chat_id, telegram_id)
         elif data.startswith("structure:"):
@@ -418,14 +433,14 @@ class BotService:
         self.telegram.send_message(chat["id"], message, _keyboard(buttons))
 
     def _is_admin(self, telegram_id: str) -> bool:
-        return telegram_id in self.admin_ids
+        return telegram_id in self.admin_ids or any(item.telegram_id == telegram_id for item in self.repository.active_admin_grants())
 
     def _admin_menu(self, chat_id: int, telegram_id: str, message_id: int | None = None) -> None:
         if not self._is_admin(telegram_id):
             self.telegram.send_message(chat_id, "Команда доступна только администратору.")
             return
         round_ = self.repository.get_active_round()
-        buttons = [("Формат и пример CSV", "admin:csv-format")]
+        buttons = [("Администраторы", "admin:admins"), ("Формат и пример CSV", "admin:csv-format")]
         if self.repository.pending_operations():
             buttons.append(("Восстановить отправки", "admin:outbox"))
         if round_:
@@ -470,6 +485,186 @@ class BotService:
             f"📝 Прогнозы: {confirmed} · 📊 Результаты: {result_count}/{len(round_.fixtures) if round_ else 0}",
             _keyboard(buttons),
         )
+
+    def _admin_management(self, chat_id: int, telegram_id: str, message_id: int | None = None) -> None:
+        if not self._is_admin(telegram_id):
+            self.telegram.send_message(chat_id, "Команда доступна только администратору.")
+            return
+        self._clear_admin_actions(telegram_id)
+        people = {item.telegram_id: item for item in self.repository.participants()}
+        active_grants = {item.telegram_id: item for item in self.repository.active_admin_grants()}
+        lines = ["👥 Администраторы"]
+        for bootstrap_id in sorted(self.admin_ids):
+            participant = people.get(bootstrap_id)
+            lines.append(f"• {self._admin_label(participant)} — из защищённого env")
+        for grant in active_grants.values():
+            if grant.telegram_id not in self.admin_ids:
+                lines.append(f"• {self._admin_label(people.get(grant.telegram_id))} — назначен")
+        if len(lines) == 1:
+            lines.append("Пока нет зарегистрированных администраторов.")
+        revocable = [
+            item for item in active_grants.values()
+            if item.telegram_id not in self.admin_ids and item.telegram_id != telegram_id
+        ]
+        buttons = [("Добавить", "admin:admins:add:0")]
+        if revocable:
+            buttons.append(("Отозвать доступ", "admin:admins:revoke"))
+        buttons.append(("Назад в админ-меню", "admin:menu"))
+        self._admin_card(chat_id, message_id, "\n".join(lines), _keyboard(buttons))
+
+    def _admin_add_candidates(self, chat_id: int, telegram_id: str, message_id: int | None, page_value: str) -> None:
+        if not self._is_admin(telegram_id):
+            self.telegram.send_message(chat_id, "Команда доступна только администратору.")
+            return
+        try:
+            page = max(0, int(page_value))
+        except ValueError:
+            self._admin_action_stale(chat_id)
+            return
+        candidates = sorted(
+            (item for item in self.repository.participants() if not self._is_admin(item.telegram_id)),
+            key=lambda item: (item.display_name.casefold(), item.participant_id),
+        )
+        per_page = 8
+        page_count = max(1, (len(candidates) + per_page - 1) // per_page)
+        if page >= page_count:
+            self._admin_action_stale(chat_id)
+            return
+        self._clear_admin_actions(telegram_id)
+        subset = candidates[page * per_page:(page + 1) * per_page]
+        buttons: list[tuple[str, str]] = []
+        for item in subset:
+            token = self._issue_admin_action(
+                telegram_id, "grant-select", item.telegram_id, self.repository.admin_grant_revision(item.telegram_id)
+            )
+            buttons.append((self._admin_label(item), f"admin:admins:select:{token}"))
+        if page:
+            buttons.append(("◀️", f"admin:admins:add:{page - 1}"))
+        if page + 1 < page_count:
+            buttons.append(("▶️", f"admin:admins:add:{page + 1}"))
+        buttons.append(("Назад", "admin:admins"))
+        text = "➕ Добавить администратора\nВыберите зарегистрированного участника."
+        if not subset:
+            text += "\nНет доступных участников."
+        self._admin_card(chat_id, message_id, text, _keyboard(buttons))
+
+    def _admin_revoke_candidates(self, chat_id: int, telegram_id: str, message_id: int | None) -> None:
+        if not self._is_admin(telegram_id):
+            self.telegram.send_message(chat_id, "Команда доступна только администратору.")
+            return
+        people = {item.telegram_id: item for item in self.repository.participants()}
+        candidates = [
+            grant for grant in self.repository.active_admin_grants()
+            if grant.telegram_id not in self.admin_ids and grant.telegram_id != telegram_id
+        ]
+        self._clear_admin_actions(telegram_id)
+        buttons = []
+        for grant in candidates:
+            token = self._issue_admin_action(telegram_id, "revoke-select", grant.telegram_id, grant.revision)
+            buttons.append((self._admin_label(people.get(grant.telegram_id)), f"admin:admins:select:{token}"))
+        buttons.append(("Назад", "admin:admins"))
+        self._admin_card(
+            chat_id,
+            message_id,
+            "➖ Отозвать доступ\nBootstrap-администраторы из защищённого env здесь не изменяются.",
+            _keyboard(buttons),
+        )
+
+    def _admin_action_selected(self, chat_id: int, telegram_id: str, message_id: int | None, token: str) -> None:
+        if not self._is_admin(telegram_id):
+            self._admin_action_stale(chat_id)
+            return
+        action = self._take_admin_action(telegram_id, token)
+        if not action or action[0] not in {"grant-select", "revoke-select"}:
+            self._admin_action_stale(chat_id)
+            return
+        kind, target_id, expected_revision = action
+        participant = self.repository.get_participant(target_id)
+        if (
+            not participant
+            or target_id == telegram_id
+            or self.repository.admin_grant_revision(target_id) != expected_revision
+        ):
+            self._admin_action_stale(chat_id)
+            return
+        if kind == "grant-select":
+            if self._is_admin(target_id):
+                self._admin_action_stale(chat_id)
+                return
+            # Only one confirmation can remain live.  This prevents two
+            # rapid selections from the same stale candidate page creating
+            # unrelated grants in parallel.
+            self._clear_admin_actions(telegram_id)
+            confirmation = self._issue_admin_action(telegram_id, "grant-confirm", target_id, expected_revision)
+            text = f"Назначить {self._admin_label(participant)} администратором?"
+            buttons = [("Подтвердить", f"admin:admins:confirm:{confirmation}"), ("Назад", "admin:admins:add:0")]
+        else:
+            if target_id in self.admin_ids or not any(item.telegram_id == target_id for item in self.repository.active_admin_grants()):
+                self._admin_action_stale(chat_id)
+                return
+            self._clear_admin_actions(telegram_id)
+            confirmation = self._issue_admin_action(telegram_id, "revoke-confirm", target_id, expected_revision)
+            text = f"Отозвать доступ администратора у {self._admin_label(participant)}?"
+            buttons = [("Подтвердить отзыв", f"admin:admins:confirm:{confirmation}"), ("Назад", "admin:admins:revoke")]
+        self._admin_card(chat_id, message_id, text, _keyboard(buttons))
+
+    def _admin_action_confirmed(self, chat_id: int, telegram_id: str, message_id: int | None, token: str) -> None:
+        if not self._is_admin(telegram_id):
+            self._admin_action_stale(chat_id)
+            return
+        action = self._take_admin_action(telegram_id, token)
+        if not action or action[0] not in {"grant-confirm", "revoke-confirm"}:
+            self._admin_action_stale(chat_id)
+            return
+        kind, target_id, expected_revision = action
+        participant = self.repository.get_participant(target_id)
+        audit_actor = self._actor_fingerprint(telegram_id) or "unavailable"
+        if not participant or target_id == telegram_id:
+            self._admin_action_stale(chat_id)
+            return
+        if kind == "grant-confirm":
+            changed = self.repository.grant_admin(
+                target_id, participant.participant_id, audit_actor, self.now().isoformat(), expected_revision
+            )
+            if not changed:
+                self._admin_action_stale(chat_id)
+                return
+            text = f"{self._admin_label(participant)} назначен администратором."
+        else:
+            if target_id in self.admin_ids:
+                self._admin_action_stale(chat_id)
+                return
+            changed = self.repository.revoke_admin(target_id, audit_actor, self.now().isoformat(), expected_revision)
+            if not changed:
+                self._admin_action_stale(chat_id)
+                return
+            text = f"Доступ администратора для {self._admin_label(participant)} отозван."
+        self._clear_admin_actions(telegram_id)
+        self._admin_card(chat_id, message_id, text, _keyboard([("К администраторам", "admin:admins"), ("Назад в админ-меню", "admin:menu")]))
+
+    def _clear_admin_actions(self, telegram_id: str) -> None:
+        self.pending_admin_actions.pop(telegram_id, None)
+
+    def _issue_admin_action(self, telegram_id: str, action: str, target_id: str, expected_revision: str) -> str:
+        token = secrets.token_urlsafe(6)
+        self.pending_admin_actions.setdefault(telegram_id, {})[token] = (action, target_id, expected_revision)
+        return token
+
+    def _take_admin_action(self, telegram_id: str, token: str) -> tuple[str, str, str] | None:
+        actions = self.pending_admin_actions.get(telegram_id, {})
+        action = actions.pop(token, None)
+        if not actions:
+            self.pending_admin_actions.pop(telegram_id, None)
+        return action
+
+    def _admin_action_stale(self, chat_id: int) -> None:
+        self.telegram.send_message(chat_id, "Действие устарело или недоступно. Откройте /admin → «Администраторы».")
+
+    @staticmethod
+    def _admin_label(participant) -> str:
+        if not participant:
+            return "Зарегистрированный администратор"
+        return " ".join(participant.display_name.split())[:80] or "Участник"
 
     def _csv_format(self, chat_id: int, telegram_id: str) -> None:
         if not self._is_admin(telegram_id):
@@ -620,18 +815,16 @@ class BotService:
             return
         names = {item.participant_id: item.display_name for item in self.repository.participants()}
         try:
-            chart_path, popularity_rows = build_popularity_chart(self.output_dir, round_, predictions)
+            revision = hashlib.sha256(repr(("v7-csv-bundle-selection-heatmap-layout", round_.checksum, predictions, sorted(names.items()))).encode()).hexdigest()[:16]
+            operation_key = f"publish-v7:{round_.round_id}:{revision}"
             coupons_path = build_public_coupons_csv(self.output_dir, round_, predictions, self.repository.participants())
         except Exception as error:
             logging.getLogger(__name__).exception("publish_bundle_failed round_id=%s", round_.round_id)
             self.telegram.send_message(chat_id, f"Публикация не начата: не удалось собрать материалы ({type(error).__name__}).")
             return
-        revision = hashlib.sha256(repr(("v7-csv-bundle-selection-heatmap-layout", round_.checksum, predictions, sorted(names.items()))).encode()).hexdigest()[:16]
-        operation_key = f"publish-v7:{round_.round_id}:{revision}"
         if self.repository.operation_done(operation_key):
             self._admin_menu(chat_id, telegram_id, message_id)
             return
-        stats_caption = _top_stats_caption(round_.round_id, popularity_rows)
         if not self._send_once(
             f"{operation_key}:coupons-file",
             lambda: self._delivery_telegram.send_document(
@@ -642,12 +835,21 @@ class BotService:
         ):
             self._recovery_notice(chat_id)
             return
-        if not self._send_once(
-            f"{operation_key}:stats-chart",
-            lambda: self._delivery_telegram.send_photo(self.tournament_chat_id, str(chart_path), stats_caption),
-        ):
-            self._recovery_notice(chat_id)
-            return
+        chart_operation = f"{operation_key}:stats-chart"
+        if not self.repository.operation_done(chart_operation):
+            try:
+                chart, popularity_rows = build_popularity_chart(self.output_dir, round_, predictions)
+            except Exception as error:
+                logging.getLogger(__name__).exception("publish_png_failed round_id=%s", round_.round_id)
+                self.telegram.send_message(chat_id, f"Публикация не начата: не удалось собрать PNG ({type(error).__name__}).")
+                return
+            stats_caption = _top_stats_caption(round_.round_id, popularity_rows)
+            if not self._send_once(
+                chart_operation,
+                lambda: self._delivery_telegram.send_photo_bytes(self.tournament_chat_id, chart.filename, chart.content, stats_caption),
+            ):
+                self._recovery_notice(chat_id)
+                return
         self.repository.mark_operation_done(operation_key)
         self._admin_menu(chat_id, telegram_id, message_id)
 
@@ -681,7 +883,6 @@ class BotService:
             interim_path, leaderboard = build_interim_results_export(
                 self.output_dir, round_, predictions, results, self.repository.participants()
             )
-            outcome_chart = build_outcome_chart(self.output_dir, round_, predictions, results)
         except Exception as error:
             logging.getLogger(__name__).exception("interim_bundle_failed round_id=%s", round_.round_id)
             self.telegram.send_message(chat_id, f"Публикация не начата: не удалось собрать CSV ({type(error).__name__}).")
@@ -710,16 +911,25 @@ class BotService:
         ):
             self._recovery_notice(chat_id)
             return
-        if not self._send_once(
-            f"{operation_key}:outcome-chart",
-            lambda: self._delivery_telegram.send_photo(
-                self.tournament_chat_id,
-                str(outcome_chart),
-                "",
-            ),
-        ):
-            self._recovery_notice(chat_id)
-            return
+        chart_operation = f"{operation_key}:outcome-chart"
+        if not self.repository.operation_done(chart_operation):
+            try:
+                outcome_chart = build_outcome_chart(self.output_dir, round_, predictions, results)
+            except Exception as error:
+                logging.getLogger(__name__).exception("interim_png_failed round_id=%s", round_.round_id)
+                self.telegram.send_message(chat_id, f"Публикация не начата: не удалось собрать PNG ({type(error).__name__}).")
+                return
+            if not self._send_once(
+                chart_operation,
+                lambda: self._delivery_telegram.send_photo_bytes(
+                    self.tournament_chat_id,
+                    outcome_chart.filename,
+                    outcome_chart.content,
+                    "",
+                ),
+            ):
+                self._recovery_notice(chat_id)
+                return
         self.repository.mark_operation_done(operation_key)
         self._admin_menu(chat_id, telegram_id, message_id)
 
@@ -880,8 +1090,10 @@ class BotService:
             self._recovery_notice(chat_id)
             return
         predictions = self.repository.latest_predictions(round_.round_id)
-        paths = build_reports(self.output_dir, round_.round_id, predictions, results, self.repository.participants(), self.now())
-        outcome_chart = build_outcome_chart(self.output_dir, round_, predictions, results, final=True)
+        paths = build_reports(
+            self.output_dir, round_.round_id, predictions, results, self.repository.participants(), self.now(),
+            include_charts=False,
+        )
         operation_key = f"score-v4:{round_.round_id}:{paths['scoring'].parent.name}"
         if self.repository.operation_done(operation_key):
             self.telegram.send_message(chat_id, "Этот scoring уже обработан.")
@@ -893,24 +1105,31 @@ class BotService:
             if not self._send_once(f"{operation_key}:group-board", lambda: self._delivery_telegram.send_document(self.tournament_chat_id, str(paths["public_leaderboard"]), "final_leaderboard.csv")):
                 self._recovery_notice(chat_id)
                 return
-            if not self._send_once(
-                f"{operation_key}:chart-leaderboard",
-                lambda: self._delivery_telegram.send_photo(
-                    self.tournament_chat_id, str(paths["chart_leaderboard"]), "Итоговый рейтинг валовых выплат"
-                ),
-            ):
-                self._recovery_notice(chat_id)
-                return
-            if not self._send_once(
-                f"{operation_key}:outcome-chart",
-                lambda: self._delivery_telegram.send_photo(
-                    self.tournament_chat_id,
-                    str(outcome_chart),
-                    "",
-                ),
-            ):
-                self._recovery_notice(chat_id)
-                return
+            leaderboard_operation = f"{operation_key}:chart-leaderboard"
+            if not self.repository.operation_done(leaderboard_operation):
+                leaderboard_chart = render_report_chart(paths["chart_spec"], "chart_leaderboard")
+                if not self._send_once(
+                    leaderboard_operation,
+                    lambda: self._delivery_telegram.send_photo_bytes(
+                        self.tournament_chat_id, leaderboard_chart.filename, leaderboard_chart.content, "Итоговый рейтинг валовых выплат"
+                    ),
+                ):
+                    self._recovery_notice(chat_id)
+                    return
+            outcome_operation = f"{operation_key}:outcome-chart"
+            if not self.repository.operation_done(outcome_operation):
+                outcome_chart = build_outcome_chart(self.output_dir, round_, predictions, results, final=True)
+                if not self._send_once(
+                    outcome_operation,
+                    lambda: self._delivery_telegram.send_photo_bytes(
+                        self.tournament_chat_id,
+                        outcome_chart.filename,
+                        outcome_chart.content,
+                        "",
+                    ),
+                ):
+                    self._recovery_notice(chat_id)
+                    return
         self.repository.mark_operation_done(operation_key)
         self.repository.mark_round_scored(round_.round_id, self.now().isoformat())
         self.telegram.send_message(chat_id, "Скоринг завершён: totals scoring.csv и leaderboard.csv сверены.")
@@ -2380,6 +2599,7 @@ def _goal_keyboard(prefix: str, match_id: str) -> dict:
 
 def _is_inplace_admin_action(data: str) -> bool:
     return data in {"admin:menu", "admin:results", "admin:publish", "admin:publish-interim"} or data.startswith((
+        "admin:admins",
         "admin:result:",
         "admin:home-goals:",
         "admin:away-goals:",
