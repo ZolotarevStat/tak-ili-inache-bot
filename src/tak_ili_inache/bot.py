@@ -611,7 +611,7 @@ class BotService:
         if self.tournament_chat_id is None:
             self.telegram.send_message(chat_id, "TOURNAMENT_CHAT_ID не настроен.")
             return
-        if any(key.startswith(("publish-v2:", "publish-v3:", "publish-v4:", "publish-v5:", "publish-v6:")) for key in self.repository.pending_operations()):
+        if any(key.startswith(("publish-v2:", "publish-v3:", "publish-v4:", "publish-v5:", "publish-v6:", "publish-v7:")) for key in self.repository.pending_operations()):
             self._recovery_notice(chat_id)
             return
         predictions = self.repository.latest_predictions(round_.round_id)
@@ -626,8 +626,8 @@ class BotService:
             logging.getLogger(__name__).exception("publish_bundle_failed round_id=%s", round_.round_id)
             self.telegram.send_message(chat_id, f"Публикация не начата: не удалось собрать материалы ({type(error).__name__}).")
             return
-        revision = hashlib.sha256(repr(("v6-csv-bundle-selection-heatmap", round_.checksum, predictions, sorted(names.items()))).encode()).hexdigest()[:16]
-        operation_key = f"publish-v6:{round_.round_id}:{revision}"
+        revision = hashlib.sha256(repr(("v7-csv-bundle-selection-heatmap-layout", round_.checksum, predictions, sorted(names.items()))).encode()).hexdigest()[:16]
+        operation_key = f"publish-v7:{round_.round_id}:{revision}"
         if self.repository.operation_done(operation_key):
             self._admin_menu(chat_id, telegram_id, message_id)
             return
@@ -662,7 +662,7 @@ class BotService:
         if self.tournament_chat_id is None:
             self.telegram.send_message(chat_id, "TOURNAMENT_CHAT_ID не настроен.")
             return
-        if any(key.startswith(("interim-v1:", "interim-v2:", "interim-v3:", "interim-v4:", "interim-v5:", "interim-v6:")) for key in self.repository.pending_operations()):
+        if any(key.startswith(("interim-v1:", "interim-v2:", "interim-v3:", "interim-v4:", "interim-v5:", "interim-v6:", "interim-v7:")) for key in self.repository.pending_operations()):
             self._recovery_notice(chat_id)
             return
         predictions = self.repository.latest_predictions(round_.round_id)
@@ -696,9 +696,9 @@ class BotService:
             for result in sorted(results, key=lambda item: item.match_id)
         )
         revision = hashlib.sha256(
-            repr(("interim-v6-html-caption", round_.checksum, predictions, normalized_results, sorted(names.items()))).encode()
+            repr(("interim-v7-layout-no-outcome-caption", round_.checksum, predictions, normalized_results, sorted(names.items()))).encode()
         ).hexdigest()[:16]
-        operation_key = f"interim-v6:{round_.round_id}:{revision}"
+        operation_key = f"interim-v7:{round_.round_id}:{revision}"
         if self.repository.operation_done(operation_key):
             self._admin_menu(chat_id, telegram_id, message_id)
             return
@@ -715,7 +715,7 @@ class BotService:
             lambda: self._delivery_telegram.send_photo(
                 self.tournament_chat_id,
                 str(outcome_chart),
-                "В ячейке — число выборов события. Зелёный — зашло, красный — не зашло, синий — возврат, серый — ожидается. Выплата экспресса начисляется только после расчёта всех его событий.",
+                "",
             ),
         ):
             self._recovery_notice(chat_id)
@@ -876,13 +876,13 @@ class BotService:
         if {item.match_id for item in results} != {item.match_id for item in round_.fixtures}:
             self.telegram.send_message(chat_id, "Скоринг заблокирован: внесены результаты не для всех матчей.")
             return
-        if any(key.startswith(("score:", "score-v2:", "score-v3:")) for key in self.repository.pending_operations()):
+        if any(key.startswith(("score:", "score-v2:", "score-v3:", "score-v4:")) for key in self.repository.pending_operations()):
             self._recovery_notice(chat_id)
             return
         predictions = self.repository.latest_predictions(round_.round_id)
         paths = build_reports(self.output_dir, round_.round_id, predictions, results, self.repository.participants(), self.now())
         outcome_chart = build_outcome_chart(self.output_dir, round_, predictions, results, final=True)
-        operation_key = f"score-v3:{round_.round_id}:{paths['scoring'].parent.name}"
+        operation_key = f"score-v4:{round_.round_id}:{paths['scoring'].parent.name}"
         if self.repository.operation_done(operation_key):
             self.telegram.send_message(chat_id, "Этот scoring уже обработан.")
             return
@@ -906,7 +906,7 @@ class BotService:
                 lambda: self._delivery_telegram.send_photo(
                     self.tournament_chat_id,
                     str(outcome_chart),
-                    "Цвет показывает исход отдельного события, а не всей ставки: зелёный — зашло; красный — не зашло; синий — возврат.",
+                    "",
                 ),
             ):
                 self._recovery_notice(chat_id)

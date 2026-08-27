@@ -6,23 +6,24 @@
 |---|---|
 | Package | `tak-ili-inache-bot` |
 | Version | `0.1.0` |
-| Release status | `REPORTING/EXCEL/PRIVACY P1 ACTIVE / PRODUCTION ACTIVATION PASS` |
+| Release status | `REPORTING/EXCEL/PRIVACY P1 R2 ACTIVE / PRODUCTION ACTIVATION PASS` |
 | Open gate | bounded owner reporting smoke |
 | Application MVP baseline commit | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` |
 | S3/infra publication commit | `4a3540f98f6c310c7a842caaf9679218802b15a0` |
 | Active application feature commit | `9f8c0be` on `feature/group-admin-ux-p1` |
-| Release ID | `0.1.0-reporting-heatmaps-excel-p1-r1-20260827-local` |
-| Local verification at | `2026-08-27, interim-v6 HTML caption, 183-test local package GO` |
+| Release ID | `0.1.0-reporting-heatmaps-excel-p1-r2-20260827-local` |
+| Local verification at | `2026-08-27, publish-v7/interim-v7/score-v4, 184-test local package GO` |
 | Python | `3.12.7` local; `3.13.5` VDS |
-| Candidate runtime digest ×2 | `sha256:14f3b901de88ad84837046972e389c4624db6c8353336519494a14899e412efa` |
-| Active VDS release | `0.1.0-reporting-heatmaps-excel-p1-r1-20260827-local` |
+| Candidate runtime digest ×2 | `sha256:e785f6f88f6ae53aa5dc586d85af312e3d9c7ff88cec454792e5405ba27ad478` |
+| Active VDS release | `0.1.0-reporting-heatmaps-excel-p1-r2-20260827-local` |
 
-The reporting/Excel/privacy r1 release completed immutable staging, remote
+The r2 reporting/Excel/privacy release completed immutable staging, remote
 Python 3.13.5 suite/digest verification, transactional activation, strict health
-and encrypted S3 backups before and after activation. The earlier staged
-`0.1.0-reporting-heatmaps-excel-p1-20260827-local` is immutable and stale after
-the interim-v6 delta; it is **not** an activation target. Active round data was
-preserved. The bounded owner reporting smoke is the remaining product check.
+and encrypted S3 backups before and after activation. Active round data was
+preserved. The bounded owner reporting smoke remains the only product check.
+The earlier staged `0.1.0-reporting-heatmaps-excel-p1-20260827-local` is
+immutable and stale and is **not** an activation target. Active round data is
+outside this package step.
 
 ## Historical VDS deployment gate — predates current local candidate
 
@@ -46,16 +47,24 @@ release surface: `pyproject.toml`, `Dockerfile`, `src/tak_ili_inache/` и `deplo
 Planning-документы, audits, tests, runtime data, venv и build products не могут
 изменить этот digest. Он воспроизводимо рассчитан дважды с идентичным результатом.
 
-## Reporting heatmaps, Excel and privacy P1 — LOCAL+REMOTE PASS / ACTIVE
+## Reporting heatmaps, Excel and privacy P1 r2 — LOCAL+REMOTE PASS / ACTIVE
 
 | Field | Value |
 |---|---|
-| Release ID | `0.1.0-reporting-heatmaps-excel-p1-r1-20260827-local` |
-| Runtime digest ×2 | `sha256:14f3b901de88ad84837046972e389c4624db6c8353336519494a14899e412efa` |
-| Scope | interim-v6 HTML caption: bold only participant name, escaped dynamic HTML and bounded caption length; reporting/Excel/privacy delta remains in `bot.py` and `reporting.py` |
-| Full suite | `Ran 183 tests` / `OK`; targeted runtime GO `41/41`, P0/P1 findings 0 |
+| Release ID | `0.1.0-reporting-heatmaps-excel-p1-r2-20260827-local` |
+| Runtime digest ×2 | `sha256:e785f6f88f6ae53aa5dc586d85af312e3d9c7ff88cec454792e5405ba27ad478` |
+| Scope | pixel-safe label/grid layout and blank outcome captions; publish-v7/interim-v7/score-v4 reporting delta |
+| Full suite | `Ran 184 tests` / `OK`; targeted runtime GO `29/29`, P0/P1 findings 0 |
 | Local verification | compile, shell syntax, diff check and sensitive/forbidden scan PASS |
-| External status | immutable staging and Python 3.13.5 `183/183`, exact digest, transaction and strict health PASS; encrypted S3 backups before/after activation PASS; owner reporting smoke remains open |
+| External status | immutable staging and Python 3.13.5 `184/184`, exact digest, transaction and strict health PASS; encrypted S3 backups before/after activation PASS; owner reporting smoke remains open |
+
+## Historical production baseline — reporting/Excel/privacy r1
+
+`0.1.0-reporting-heatmaps-excel-p1-r1-20260827-local` was the preceding VDS `current`,
+with digest `sha256:14f3b901de88ad84837046972e389c4624db6c8353336519494a14899e412efa`.
+Its prior immutable staging, remote Python 3.13.5 `183/183`, digest verification,
+transaction, strict health and encrypted S3 backup evidence remain historical r1
+facts and do not verify r2.
 
 ## Verification results
 

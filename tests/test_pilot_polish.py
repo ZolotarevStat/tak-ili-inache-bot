@@ -9,16 +9,18 @@ from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from tak_ili_inache.bot import BotService, _interim_caption, _top_stats_caption
 from tak_ili_inache.fake_repository import FakeRepository
 from tak_ili_inache.fixtures import import_fixtures
-from tak_ili_inache.models import Bet, BetEvent, BetResult, BetType, Fixture, Market, Participant, Prediction
+from tak_ili_inache.models import Bet, BetEvent, BetResult, BetType, Fixture, Market, Participant, Prediction, Round
 from tak_ili_inache.presentation import compact_match_label, compact_team_name
 from tak_ili_inache.reporting import (
     HEATMAP_GRID_TOP,
     HEATMAP_HEADER_Y,
+    HEATMAP_LABEL_GAP,
+    HEATMAP_LABEL_WIDTH,
     HEATMAP_LEFT,
     HEATMAP_CELL_WIDTH,
     HEATMAP_ROW_HEIGHT,
@@ -29,6 +31,8 @@ from tak_ili_inache.reporting import (
     OUTCOME_LEGEND,
     PENDING_OUTCOME_COLOR,
     _fonts,
+    _fixture_label,
+    _heatmap_layout,
     _outcome_cell_color,
     build_interim_results_export,
     build_outcome_chart,
@@ -145,6 +149,49 @@ class PilotPolishTests(unittest.TestCase):
                 self.assertLessEqual(image.width, 900)
                 self.assertLessEqual(image.height, 900)
 
+    def test_long_fixture_labels_stay_in_shared_label_zone_before_every_grid(self) -> None:
+        names = (
+            ("АЕК Афины", "Левски София"),
+            ("Виктория Пльзень", "Црвена Звезда"),
+            ("Жальгирис Каунас", "Бешикташ"),
+        )
+        fixtures = tuple(
+            Fixture(
+                fixture.round_id,
+                fixture.match_id,
+                fixture.kickoff_msk,
+                *(names[index] if index < len(names) else (fixture.home_team, fixture.away_team)),
+                fixture.total_line,
+                fixture.odds,
+            )
+            for index, fixture in enumerate(self.round_.fixtures)
+        )
+        long_round = Round(self.round_.round_id, fixtures, self.round_.deadline_msk, "long-labels")
+        _, bold_font, _ = _fonts()
+        selection_layout = _heatmap_layout(HEATMAP_GRID_TOP, len(fixtures), 40)
+        outcome_layout = _heatmap_layout(OUTCOME_HEATMAP_GRID_TOP, len(fixtures), 54)
+        self.assertEqual(selection_layout.grid_x, HEATMAP_LEFT)
+        self.assertEqual(selection_layout.label_x + HEATMAP_LABEL_WIDTH + HEATMAP_LABEL_GAP, selection_layout.grid_x)
+        for layout in (selection_layout, outcome_layout):
+            canvas = Image.new("RGB", (layout.width, layout.height), "white")
+            draw = ImageDraw.Draw(canvas)
+            for row_no, fixture in enumerate(fixtures):
+                label = _fixture_label(fixture, bold_font, layout.label_width)
+                self.assertNotIn("\n", label)
+                bbox = draw.textbbox((layout.label_x, layout.grid_top + row_no * layout.row_height + 14), label, font=bold_font)
+                self.assertLessEqual(bbox[2], layout.grid_x - layout.label_gap)
+                self.assertLessEqual(bbox[2], layout.label_x + layout.label_width)
+
+        prediction = self._prediction("player", (Market.P1,) * 6)
+        results = (BetResult("M01", frozenset({Market.P1, Market.ONE_X, Market.TB})),)
+        with tempfile.TemporaryDirectory() as output:
+            selection, _ = build_popularity_chart(output, long_round, (prediction,))
+            outcome = build_outcome_chart(output, long_round, (prediction,), results)
+            for path in (selection, outcome):
+                with Image.open(path) as image:
+                    self.assertLessEqual(image.width, 900)
+                    self.assertLessEqual(image.height, 900)
+
     def test_outcome_heatmap_uses_settled_and_pending_states(self) -> None:
         prediction = self._prediction(
             "player", (Market.P1, Market.P2, Market.TB, Market.TM, Market.ONE_X, Market.X_TWO)
@@ -231,7 +278,7 @@ class PilotPolishTests(unittest.TestCase):
             self.assertEqual(len(group), 1)
             self.assertFalse(any(chat_id == -100 for chat_id, _, _ in tg.messages))
             self.assertEqual(len([item for item in tg.photos if item[0] == -100]), 1)
-            self.assertIn("экспресса", tg.photos[-1][2])
+            self.assertEqual(tg.photos[-1][2], "")
             self.assertEqual(tg.document_parse_modes[-1], "HTML")
             self.assertIn("Матчей: 1/12", group[0][2])
             self.assertIn("Игрок Один", group[0][2])

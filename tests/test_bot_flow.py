@@ -239,7 +239,7 @@ class BotFlowTests(unittest.TestCase):
                 {
                     tg.photos[0][2],
                     "Итоговый рейтинг валовых выплат",
-                    "Цвет показывает исход отдельного события, а не всей ставки: зелёный — зашло; красный — не зашло; синий — возврат.",
+                    "",
                 },
             )
             self.assertIn("сверены", tg.messages[-1][1])
@@ -305,7 +305,7 @@ class BotFlowTests(unittest.TestCase):
             self.assertEqual(len([item for item in tg.documents if item[0] == -100]), 1)
             self.assertEqual(len([item for item in tg.photos if item[0] == -100]), 2)
             self.assertTrue(any("Итоговый рейтинг" in item[2] for item in tg.photos))
-            self.assertTrue(any("зелёный" in item[2] for item in tg.photos))
+            self.assertEqual(sum(item[2] == "" for item in tg.photos if item[0] == -100), 1)
 
     def test_final_group_leaderboard_is_public_formula_safe_and_idempotent(self) -> None:
         repo, tg = FakeRepository(), FakeTelegram()

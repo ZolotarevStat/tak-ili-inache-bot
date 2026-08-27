@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
@@ -13,14 +14,14 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from .models import BetResult, Market, Participant, Prediction, Round
-from .presentation import MARKET_ORDER, compact_team_name, public_event_label
+from .presentation import MARKET_ORDER, public_event_label
 from .scoring import score_partial_bets, score_predictions
 
 BET_TYPE_LABELS = {"single": "Ординары", "express": "Экспрессы"}
 
 REPORT_RENDER_VERSION = "report-render-v4"
-SELECTION_HEATMAP_RENDER_VERSION = "selection-heatmap-v3"
-OUTCOME_HEATMAP_RENDER_VERSION = "outcome-heatmap-v2"
+SELECTION_HEATMAP_RENDER_VERSION = "selection-heatmap-v4"
+OUTCOME_HEATMAP_RENDER_VERSION = "outcome-heatmap-v3"
 HEATMAP_TITLE_Y = 24
 HEATMAP_SUBTITLE_Y = 66
 HEATMAP_HEADER_Y = 112
@@ -41,7 +42,10 @@ OUTCOME_TARGETS = {
     "returned": (100, 154, 220),
     "pending": (179, 188, 201),
 }
-HEATMAP_LEFT = 290
+HEATMAP_LABEL_X = 24
+HEATMAP_LABEL_WIDTH = 260
+HEATMAP_LABEL_GAP = 16
+HEATMAP_LEFT = HEATMAP_LABEL_X + HEATMAP_LABEL_WIDTH + HEATMAP_LABEL_GAP
 HEATMAP_CELL_WIDTH = 80
 HEATMAP_ROW_HEIGHT = 47
 PUBLIC_LEADERBOARD_FIELDS = (
@@ -55,6 +59,19 @@ PUBLIC_LEADERBOARD_FIELDS = (
     "single_payout",
     "express_payout",
 )
+
+
+@dataclass(frozen=True)
+class HeatmapLayout:
+    label_x: int
+    label_width: int
+    label_gap: int
+    grid_x: int
+    grid_top: int
+    cell_width: int
+    row_height: int
+    width: int
+    height: int
 
 
 def build_public_coupons_csv(
@@ -484,31 +501,80 @@ def _prediction_export_fields() -> list[str]:
     ]
 
 
+def _heatmap_layout(grid_top: int, fixture_count: int, bottom_padding: int) -> HeatmapLayout:
+    """Shared mobile layout: labels, a real gap, then the immutable market grid."""
+    grid_x = HEATMAP_LEFT
+    return HeatmapLayout(
+        label_x=HEATMAP_LABEL_X,
+        label_width=HEATMAP_LABEL_WIDTH,
+        label_gap=HEATMAP_LABEL_GAP,
+        grid_x=grid_x,
+        grid_top=grid_top,
+        cell_width=HEATMAP_CELL_WIDTH,
+        row_height=HEATMAP_ROW_HEIGHT,
+        width=grid_x + HEATMAP_CELL_WIDTH * len(MARKET_ORDER) + 28,
+        height=grid_top + HEATMAP_ROW_HEIGHT * fixture_count + bottom_padding,
+    )
+
+
+def _draw_heatmap_label(
+    draw: ImageDraw.ImageDraw,
+    fixture,
+    row_y: int,
+    layout: HeatmapLayout,
+    font: ImageFont.FreeTypeFont,
+) -> tuple[int, int, int, int]:
+    label = _fixture_label(fixture, font, layout.label_width)
+    position = (layout.label_x, row_y + 14)
+    bbox = draw.textbbox(position, label, font=font)
+    if bbox[2] > layout.label_x + layout.label_width:
+        raise AssertionError("heatmap fixture label crossed the label zone")
+    if bbox[2] + layout.label_gap > layout.grid_x:
+        raise AssertionError("heatmap fixture label crossed the grid gap")
+    draw.text(position, label, font=font, fill="#18212f")
+    return bbox
+
+
+def _fixture_label(fixture, font: ImageFont.FreeTypeFont, max_width: int) -> str:
+    return _truncate_pixels(f"{fixture.home_team} — {fixture.away_team}", font, max_width)
+
+
+def _truncate_pixels(value: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
+    """One-line ellipsis that obeys rendered, not character, width."""
+    if font.getlength(value) <= max_width:
+        return value
+    ellipsis = "…"
+    available = max_width - font.getlength(ellipsis)
+    if available <= 0:
+        return ellipsis
+    end = len(value)
+    while end and font.getlength(value[:end]) > available:
+        end -= 1
+    return value[:end].rstrip() + ellipsis
+
+
 def _selection_heatmap(path: Path, round_: Round, rows: list[dict]) -> None:
     title_font, bold_font, regular_font = _fonts()
-    left, top, cell_width, row_height = HEATMAP_LEFT, HEATMAP_GRID_TOP, HEATMAP_CELL_WIDTH, HEATMAP_ROW_HEIGHT
-    width = left + cell_width * len(MARKET_ORDER) + 28
-    height = top + row_height * len(round_.fixtures) + 40
-    image = Image.new("RGB", (width, height), "white")
+    layout = _heatmap_layout(HEATMAP_GRID_TOP, len(round_.fixtures), 40)
+    image = Image.new("RGB", (layout.width, layout.height), "white")
     draw = ImageDraw.Draw(image)
     draw.text((28, HEATMAP_TITLE_Y), "Полная статистика выбора событий", font=title_font, fill="#18212f")
     draw.text((28, HEATMAP_SUBTITLE_Y), f"Тур {round_.round_id}: число выборов по каждому матчу", font=regular_font, fill="#52606d")
     for index, market in enumerate(MARKET_ORDER):
-        x = left + index * cell_width
-        draw.text((_cell_text_x(x, cell_width, market.value, bold_font), HEATMAP_HEADER_Y), market.value, font=bold_font, fill="#18212f")
+        x = layout.grid_x + index * layout.cell_width
+        draw.text((_cell_text_x(x, layout.cell_width, market.value, bold_font), HEATMAP_HEADER_Y), market.value, font=bold_font, fill="#18212f")
     values = {(item["match_id"], item["market"]): int(item["count"]) for item in rows}
     maximum = max(values.values(), default=1)
     for row_no, fixture in enumerate(round_.fixtures):
-        y = top + row_no * row_height
-        match = f"{compact_team_name(fixture.home_team, 16)} — {compact_team_name(fixture.away_team, 16)}"
-        draw.text((28, y + 14), _truncate(match, 34), font=bold_font, fill="#18212f")
+        y = layout.grid_top + row_no * layout.row_height
+        _draw_heatmap_label(draw, fixture, y, layout, bold_font)
         for column, market in enumerate(MARKET_ORDER):
             value = values.get((fixture.match_id, market.value), 0)
             ratio = value / maximum if maximum else 0
             color = (int(240 - 155 * ratio), int(246 - 105 * ratio), 255)
-            x = left + column * cell_width
-            draw.rounded_rectangle((x, y + 5, x + cell_width - 10, y + row_height - 5), radius=7, fill=color)
-            draw.text((_cell_text_x(x, cell_width, str(value), regular_font), y + 13), str(value), font=regular_font, fill="#18212f")
+            x = layout.grid_x + column * layout.cell_width
+            draw.rounded_rectangle((x, y + 5, x + layout.cell_width - 10, y + layout.row_height - 5), radius=7, fill=color)
+            draw.text((_cell_text_x(x, layout.cell_width, str(value), regular_font), y + 13), str(value), font=regular_font, fill="#18212f")
     image.save(path, format="PNG", optimize=True)
 
 
@@ -521,10 +587,8 @@ def _outcome_heatmap(
     final: bool,
 ) -> None:
     title_font, bold_font, regular_font = _fonts()
-    left, top, cell_width, row_height = HEATMAP_LEFT, OUTCOME_HEATMAP_GRID_TOP, HEATMAP_CELL_WIDTH, HEATMAP_ROW_HEIGHT
-    width = left + cell_width * len(MARKET_ORDER) + 28
-    height = top + row_height * len(round_.fixtures) + 54
-    image = Image.new("RGB", (width, height), "white")
+    layout = _heatmap_layout(OUTCOME_HEATMAP_GRID_TOP, len(round_.fixtures), 54)
+    image = Image.new("RGB", (layout.width, layout.height), "white")
     draw = ImageDraw.Draw(image)
     title = "Итоги выбранных событий" if final else "Промежуточные итоги событий"
     draw.text((28, HEATMAP_TITLE_Y), title, font=title_font, fill="#18212f")
@@ -544,24 +608,23 @@ def _outcome_heatmap(
         draw.text((legend_x + 30, OUTCOME_HEATMAP_LEGEND_Y), label, font=regular_font, fill="#18212f")
         legend_x += 30 + regular_font.getlength(label) + 28
     for index, market in enumerate(MARKET_ORDER):
-        x = left + index * cell_width
-        draw.text((_cell_text_x(x, cell_width, market.value, bold_font), OUTCOME_HEATMAP_HEADER_Y), market.value, font=bold_font, fill="#18212f")
+        x = layout.grid_x + index * layout.cell_width
+        draw.text((_cell_text_x(x, layout.cell_width, market.value, bold_font), OUTCOME_HEATMAP_HEADER_Y), market.value, font=bold_font, fill="#18212f")
 
     values = {(item["match_id"], item["market"]): int(item["count"]) for item in rows}
     result_by_match = {item.match_id: item for item in results}
     maximum = max(values.values(), default=1)
     for row_no, fixture in enumerate(round_.fixtures):
-        y = top + row_no * row_height
-        match = f"{compact_team_name(fixture.home_team, 16)} — {compact_team_name(fixture.away_team, 16)}"
-        draw.text((28, y + 14), _truncate(match, 34), font=bold_font, fill="#18212f")
+        y = layout.grid_top + row_no * layout.row_height
+        _draw_heatmap_label(draw, fixture, y, layout, bold_font)
         result = result_by_match.get(fixture.match_id)
         for column, market in enumerate(MARKET_ORDER):
             value = values.get((fixture.match_id, market.value), 0)
             status = _event_outcome_status(result, market)
             color = _outcome_cell_color(status, value / maximum if maximum else 0)
-            x = left + column * cell_width
-            draw.rounded_rectangle((x, y + 5, x + cell_width - 10, y + row_height - 5), radius=7, fill=color)
-            draw.text((_cell_text_x(x, cell_width, str(value), regular_font), y + 13), str(value), font=regular_font, fill="#18212f")
+            x = layout.grid_x + column * layout.cell_width
+            draw.rounded_rectangle((x, y + 5, x + layout.cell_width - 10, y + layout.row_height - 5), radius=7, fill=color)
+            draw.text((_cell_text_x(x, layout.cell_width, str(value), regular_font), y + 13), str(value), font=regular_font, fill="#18212f")
     if final and len(result_by_match) != len(round_.fixtures):
         raise ValueError("final outcome heatmap requires every match result")
     image.save(path, format="PNG", optimize=True)
