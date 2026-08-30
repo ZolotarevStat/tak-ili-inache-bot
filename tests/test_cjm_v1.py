@@ -10,14 +10,16 @@ from tak_ili_inache.fixtures import import_fixtures
 
 
 class Telegram:
-    def __init__(self): self.messages, self.edits, self.answers, self.message_id = [], [], [], 0
-    def send_message(self, chat_id, text, reply_markup=None): self.message_id += 1; self.messages.append((chat_id, self.message_id, text, reply_markup)); return self.message_id
-    def edit_message(self, chat_id, message_id, text, reply_markup=None): self.edits.append((chat_id, message_id, text, reply_markup))
+    def __init__(self): self.messages, self.edits, self.answers, self.message_id, self.current = [], [], [], 0, None
+    def send_message(self, chat_id, text, reply_markup=None):
+        self.message_id += 1; self.current = (chat_id, self.message_id, text, reply_markup); self.messages.append(self.current); return self.message_id
+    def edit_message(self, chat_id, message_id, text, reply_markup=None): self.current = (chat_id, message_id, text, reply_markup); self.edits.append(self.current)
     def answer_callback(self, callback_id, text=""): self.answers.append((callback_id, text))
     def clear_keyboard(self, *args): pass
     def download_document(self, *_): return b""
     def send_document(self, *_): return None
     def send_photo(self, *_): return None
+    def send_photo_bytes(self, *_): return None
 
 
 class CjmV1Tests(unittest.TestCase):
@@ -195,7 +197,7 @@ class CjmV1Tests(unittest.TestCase):
         used = {event.match_id for group in draft.expresses for event in group}
         for event in [item for item in draft.current_events if item.match_id not in used][:size]:
             self.click_data(lambda value, event=event: value.endswith(f"x:t:{event.match_id}"))
-    def card(self): return self.tg.edits[-1] if self.tg.edits else self.tg.messages[-1]
+    def card(self): return self.tg.current
     def labels(self): return [button["text"] for row in self.card()[3]["inline_keyboard"] for button in row]
     def click(self, label):
         for row in self.card()[3]["inline_keyboard"]:

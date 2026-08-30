@@ -91,7 +91,43 @@ class LeaderboardEntry:
 
 
 @dataclass(frozen=True)
+class PartialLeaderboardEntry:
+    rank: int
+    participant_id: str
+    realized_payout: int
+    settled_bets: int
+    pending_bets: int
+    maximum_payout: int = 0
+    winning_bets: int = 0
+    losing_bets: int = 0
+    returned_bets: int = 0
+
+
+@dataclass(frozen=True)
+class PartialScoredBet:
+    participant_id: str
+    bet_no: int
+    bet_type: BetType
+    stake: int
+    status: str
+    combined_odds: Decimal
+    realized_payout: int
+    maximum_payout: int
+    event_statuses: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Participant:
     participant_id: str
     telegram_id: str
     display_name: str
+
+
+@dataclass(frozen=True)
+class AdminGrant:
+    """Current active runtime grant; audit history stays in ``admin_grants.csv``."""
+    telegram_id: str
+    participant_id: str
+    granted_by: str
+    granted_at: str
+    revision: str

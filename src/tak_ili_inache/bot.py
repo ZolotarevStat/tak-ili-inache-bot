@@ -4,24 +4,39 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
+from contextvars import ContextVar
+import html
 import tempfile
 import hashlib
+import hmac
 import logging
+import os
 import secrets
 from itertools import permutations
 from typing import Callable
 
 from .fixtures import import_fixtures
-from .models import Bet, BetEvent, BetResult, BetType, Market, Prediction, Round
-from .reporting import build_reports
+from .models import Bet, BetEvent, BetResult, BetType, Fixture, Market, Prediction, Round
+from .reporting import (
+    build_interim_results_export,
+    build_outcome_chart,
+    build_popularity_chart,
+    build_predictions_export,
+    build_public_coupons_csv,
+    build_reports,
+    render_report_chart,
+)
+from .presentation import compact_match_label, public_event_label
 from .repository import Repository
 from .delivery import UnknownDeliveryError
 from .telegram_api import TelegramClient, TelegramHttpError
 from .transport import PreSendFailure
 from .draft_store import DraftStore
+from .result_settlement import GoalChoice, settle_score
 from .validators import BANK, MAX_STAKE, MIN_STAKE, STAKE_STEP, ValidationError, validate_prediction
 
 PRIVATE_TYPES = {"private"}
+_reanchor_context: ContextVar[tuple[str, str, str] | None] = ContextVar("cjm_reanchor_context", default=None)
 
 
 class _BestEffortTelegram:
@@ -73,6 +88,11 @@ class Draft:
     revision: int = 1
     chat_id: int = 0
     active_message_id: int | None = None
+    # A durable intent reserves the next revision before a successor send.
+    # ``active_message_id=None`` makes the predecessor stale even if the
+    # process dies after Telegram accepts the send but before its id is saved.
+    reanchor_pending: bool = False
+    reanchor_predecessor_id: int | None = None
     expresses: list[list[BetEvent]] = field(default_factory=list)
     express_index: int = 0
     event_page: int = 0
@@ -88,6 +108,12 @@ class Draft:
     stake_edit_index: int = 0
 
 
+@dataclass
+class ResultScoreDraft:
+    home: GoalChoice | None = None
+    away: GoalChoice | None = None
+
+
 class BotService:
     def __init__(self, repository: Repository, telegram: TelegramClient, now: Callable[[], datetime], admin_ids: set[str] | None = None, tournament_chat_id: int | None = None, output_dir: str | Path = "output", draft_store: DraftStore | None = None) -> None:
         self.repository, self._delivery_telegram, self.now = repository, telegram, now
@@ -99,7 +125,11 @@ class BotService:
         # round revision and a short one-shot token.  They are not Telegram
         # identifiers and are never persisted or shown in copy.
         self.pending_closures: dict[str, tuple[str, str, str]] = {}
-        self.result_drafts: dict[tuple[str, str], tuple[set[Market], set[Market]]] = {}
+        # Opaque, process-local confirmation tokens.  They deliberately keep
+        # Telegram identifiers out of callback_data and invalidate on every
+        # management screen redraw.
+        self.pending_admin_actions: dict[str, dict[str, tuple[str, str, str]]] = {}
+        self.result_drafts: dict[tuple[str, str], ResultScoreDraft] = {}
         self._pending_outbox_tokens: dict[tuple[str, str], str] = {}
         self.draft_store = draft_store
         self._restore_drafts()
@@ -111,17 +141,52 @@ class BotService:
         elif "callback_query" in update:
             self._handle_callback(update["callback_query"])
 
+    def _actor_fingerprint(self, telegram_id: str) -> str | None:
+        """Never emit a Telegram identifier; telemetry is disabled without a key."""
+        key = os.environ.get("TAK_ILI_INACHE_TELEMETRY_HMAC_KEY")
+        if not key:
+            return None
+        return hmac.new(key.encode("utf-8"), telegram_id.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
+
+    def _trace_draft(self, telegram_id: str, action: str, draft: Draft, phase_before: str, card_from: int | None, card_to: int | None, outcome: str) -> None:
+        actor = self._actor_fingerprint(telegram_id)
+        if actor is None:
+            # Privacy fails closed: an unkeyed process must not create a
+            # cross-update actor correlation key.
+            return
+        logging.getLogger(__name__).info(
+            "cjm_draft_trace actor=%s update_id=%s action=%s draft_id=%s phase_before=%s phase_after=%s revision=%s card_from=%s card_to=%s outcome=%s",
+            actor,
+            self._current_update_id,
+            action,
+            draft.draft_id,
+            phase_before,
+            draft.phase,
+            draft.revision,
+            card_from if card_from is not None else "none",
+            card_to if card_to is not None else "none",
+            outcome,
+        )
+
     def _handle_message(self, message: dict) -> None:
         chat, user = message["chat"], message["from"]
         if message.get("document"):
             self._handle_document(message)
             return
-        text = (message.get("text") or "").split()[0].lower()
+        text_parts = (message.get("text") or "").split()
+        text = text_parts[0].lower() if text_parts else ""
+        # Telegram commonly sends commands addressed to a specific bot as
+        # `/command@bot_username` in groups. The update has already reached
+        # this bot, so route the command through the same allowlist as its bare
+        # form instead of treating the suffix as an unknown command.
+        if text.startswith("/") and "@" in text:
+            text = text.split("@", 1)[0]
         if text in {"/help", "/rules"}:
             self.telegram.send_message(chat["id"], self._help() if text == "/help" else self._rules())
             return
         if chat.get("type") not in PRIVATE_TYPES:
-            self.telegram.send_message(chat["id"], "Сбор и просмотр прогнозов доступны только в личном чате с ботом.")
+            if text in {"/start", "/predict", "/new", "/my", "/admin", "/status", "/publish", "/interim", "/export", "/score"}:
+                self.telegram.send_message(chat["id"], "Сбор и просмотр прогнозов доступны только в личном чате с ботом.")
             return
         telegram_id = str(user["id"])
         display_name = " ".join(filter(None, [user.get("first_name"), user.get("last_name")])) or user.get("username", "Участник")
@@ -138,6 +203,10 @@ class BotService:
             self._admin_status(chat["id"], telegram_id)
         elif text == "/publish":
             self._publish(chat["id"], telegram_id)
+        elif text == "/interim":
+            self._publish_interim(chat["id"], telegram_id)
+        elif text == "/export":
+            self._export_predictions(chat["id"], telegram_id)
         elif text == "/score":
             self._score(chat["id"], telegram_id)
         elif self._draft(telegram_id) and self._draft(telegram_id).phase == "B1" and (message.get("text") or "").strip().isdigit():
@@ -161,18 +230,32 @@ class BotService:
             if boundary_ack is not None:
                 return
             data = action
+        elif data.startswith("draft:"):
+            # Bound recovery actions validate their own draft/revision token.
+            # They must not clear a card before the deadline/token guard runs.
+            self.telegram.answer_callback(query["id"])
         else:
             if self.draft_store and _is_draft_action(data):
                 self.telegram.stale_callback(query["id"])
                 return
-            # Legacy/admin controls are intentionally one-shot UI. Draft controls
-            # use the durable revision contract above and are edited in-place.
+            inplace_admin = _is_inplace_admin_action(data)
             self.telegram.answer_callback(query["id"])
-            self.telegram.clear_keyboard(chat_id, message["message_id"])
+            if not inplace_admin:
+                # Draft controls use their durable revision contract.  The
+                # result-entry admin flow owns one editable card instead.
+                self.telegram.clear_keyboard(chat_id, message["message_id"])
         if data == "menu:new":
             self._begin_prediction(chat_id, telegram_id)
         elif data == "resume":
             self._resume_draft(chat_id, telegram_id)
+        elif data.startswith("draft:resume:"):
+            self._resume_from_my(chat_id, telegram_id, data)
+        elif data.startswith("draft:restart:ask:"):
+            self._request_draft_restart(chat_id, telegram_id, data)
+        elif data.startswith("draft:restart:yes:"):
+            self._confirm_draft_restart(chat_id, telegram_id, data)
+        elif data.startswith("draft:restart:no:"):
+            self._decline_draft_restart(chat_id, telegram_id, data)
         elif data == "menu:my":
             self._show_my(chat_id, telegram_id)
         elif data == "cancel":
@@ -207,9 +290,19 @@ class BotService:
         elif data == "admin:menu":
             self.pending_imports.pop(telegram_id, None)
             self.result_drafts = {key: value for key, value in self.result_drafts.items() if key[0] != telegram_id}
-            self._admin_menu(chat_id, telegram_id)
+            self._admin_menu(chat_id, telegram_id, message.get("message_id"))
         elif data == "admin:csv-format":
             self._csv_format(chat_id, telegram_id)
+        elif data == "admin:admins":
+            self._admin_management(chat_id, telegram_id, message.get("message_id"))
+        elif data.startswith("admin:admins:add:"):
+            self._admin_add_candidates(chat_id, telegram_id, message.get("message_id"), data.rsplit(":", 1)[-1])
+        elif data == "admin:admins:revoke":
+            self._admin_revoke_candidates(chat_id, telegram_id, message.get("message_id"))
+        elif data.startswith("admin:admins:select:"):
+            self._admin_action_selected(chat_id, telegram_id, message.get("message_id"), data.rsplit(":", 1)[-1])
+        elif data.startswith("admin:admins:confirm:"):
+            self._admin_action_confirmed(chat_id, telegram_id, message.get("message_id"), data.rsplit(":", 1)[-1])
         elif data == "back":
             self._back(chat_id, telegram_id)
         elif data.startswith("structure:"):
@@ -256,9 +349,13 @@ class BotService:
         elif data == "admin:status":
             self._admin_status(chat_id, telegram_id)
         elif data == "admin:publish":
-            self._publish(chat_id, telegram_id)
+            self._publish(chat_id, telegram_id, message.get("message_id"))
+        elif data == "admin:publish-interim":
+            self._publish_interim(chat_id, telegram_id, message.get("message_id"))
+        elif data == "admin:export-predictions":
+            self._export_predictions(chat_id, telegram_id)
         elif data == "admin:results":
-            self._result_matches(chat_id, telegram_id)
+            self._result_matches(chat_id, telegram_id, message.get("message_id"))
         elif data == "admin:score":
             self._score(chat_id, telegram_id)
         elif data == "admin:outbox":
@@ -276,17 +373,26 @@ class BotService:
         elif data.startswith("admin:close-confirm:"):
             self._confirm_close(chat_id, telegram_id, data.rsplit(":", 1)[-1])
         elif data.startswith("admin:result:"):
-            self._result_editor(chat_id, telegram_id, data.rsplit(":", 1)[-1])
+            self._result_editor(chat_id, telegram_id, data.rsplit(":", 1)[-1], message.get("message_id"))
+        elif data.startswith("admin:home-goals:"):
+            _, _, match_id, token = data.split(":", 3)
+            self._select_home_goals(chat_id, telegram_id, match_id, token, message.get("message_id"))
+        elif data.startswith("admin:away-goals:"):
+            _, _, match_id, token = data.split(":", 3)
+            self._select_away_goals(chat_id, telegram_id, match_id, token, message.get("message_id"))
+        elif data.startswith("admin:score-outcome:"):
+            _, _, match_id, market = data.split(":", 3)
+            self._select_score_outcome(chat_id, telegram_id, match_id, Market(market), message.get("message_id"))
         elif data.startswith("admin:toggle:"):
-            _, _, match_id, market = data.split(":", 3)
-            self._toggle_result(chat_id, telegram_id, match_id, Market(market))
+            match_id = data.split(":", 3)[2]
+            self._result_editor(chat_id, telegram_id, match_id, message.get("message_id"), "Форма обновлена: теперь достаточно указать счёт.")
         elif data.startswith("admin:return:"):
-            self._return_match(chat_id, telegram_id, data.rsplit(":", 1)[-1])
+            self._return_match(chat_id, telegram_id, data.rsplit(":", 1)[-1], message.get("message_id"))
         elif data.startswith("admin:return-market:"):
-            _, _, match_id, market = data.split(":", 3)
-            self._toggle_return(chat_id, telegram_id, match_id, Market(market))
+            match_id = data.split(":", 3)[2]
+            self._result_editor(chat_id, telegram_id, match_id, message.get("message_id"), "Частичный возврат убран из формы: укажите счёт или возврат всего матча.")
         elif data.startswith("admin:save-result:"):
-            self._save_result(chat_id, telegram_id, data.rsplit(":", 1)[-1])
+            self._result_editor(chat_id, telegram_id, data.rsplit(":", 1)[-1], message.get("message_id"), "Форма обновлена: результат сохранится сразу после выбора счёта.")
 
     def _handle_document(self, message: dict) -> None:
         chat, telegram_id = message["chat"], str(message["from"]["id"])
@@ -327,46 +433,238 @@ class BotService:
         self.telegram.send_message(chat["id"], message, _keyboard(buttons))
 
     def _is_admin(self, telegram_id: str) -> bool:
-        return telegram_id in self.admin_ids
+        return telegram_id in self.admin_ids or any(item.telegram_id == telegram_id for item in self.repository.active_admin_grants())
 
-    def _admin_menu(self, chat_id: int, telegram_id: str) -> None:
+    def _admin_menu(self, chat_id: int, telegram_id: str, message_id: int | None = None) -> None:
         if not self._is_admin(telegram_id):
             self.telegram.send_message(chat_id, "Команда доступна только администратору.")
             return
         round_ = self.repository.get_active_round()
-        buttons = [("Формат и пример CSV", "admin:csv-format")]
-        action_lines = ["📥 Загрузить тур — отправить CSV и проверить данные"]
+        buttons = [("Администраторы", "admin:admins"), ("Формат и пример CSV", "admin:csv-format")]
         if self.repository.pending_operations():
             buttons.append(("Восстановить отправки", "admin:outbox"))
         if round_:
             predictions = len(self.repository.latest_predictions(round_.round_id))
             result_count = len(self.repository.results(round_.round_id))
             stage = "open" if self.now() < round_.deadline_msk else "locked"
-            if round_.round_id.startswith("SMOKE-"):
-                stage = "open (тестовый)" if self.now() < round_.deadline_msk else "results/scoring (тестовый)"
-                buttons += [("Закрыть тестовый тур без расчёта", "admin:close")]
-                action_lines.append("🧪 Тестовый тур можно закрыть без расчёта в любой момент; история сохранится")
-            elif self.repository.round_scored(round_.round_id):
-                stage = "scored"
-                buttons += [("Завершить и архивировать тур", "admin:close")]
-                action_lines.append("✅ Расчёт завершён — следующий шаг: архивировать тур")
-            elif self.now() >= round_.deadline_msk and result_count < len(round_.fixtures):
-                stage = "results"
-                buttons += [("Внести результаты", "admin:results")]
-                action_lines.append("🧾 Следующий шаг: внести результаты всех матчей")
-            elif self.now() >= round_.deadline_msk:
-                stage = "scoring"
-                buttons += [("Скоринг", "admin:score")]
-                action_lines.append("🧮 Следующий шаг: рассчитать результаты")
+            smoke = round_.round_id.startswith("SMOKE-")
+            buttons.append(("Статус сдачи", "admin:status"))
+            if predictions:
+                buttons.append(("Выгрузить прогнозы CSV", "admin:export-predictions"))
+            if self.now() < round_.deadline_msk:
+                if smoke:
+                    stage = "open (тестовый)"
+                    buttons += [("Закрыть тестовый тур без расчёта", "admin:close")]
             else:
-                buttons += [("Статус сдачи", "admin:status")]
-                action_lines.append("🔓 Тур открыт до дедлайна")
+                buttons += [("Опубликовать прогнозы", "admin:publish")]
+                if smoke:
+                    stage = "results/scoring (тестовый)"
+                    buttons += [("Закрыть тестовый тур без расчёта", "admin:close")]
+                elif self.repository.round_scored(round_.round_id):
+                    stage = "scored"
+                    buttons += [("Завершить и архивировать тур", "admin:close")]
+                elif result_count < len(round_.fixtures):
+                    stage = "results"
+                    buttons += [("Внести результаты", "admin:results")]
+                    if predictions and result_count:
+                        buttons += [("Опубликовать промежуточный рейтинг", "admin:publish-interim")]
+                else:
+                    stage = "scoring"
+                    buttons += [("Скоринг", "admin:score")]
         else:
             predictions = result_count = 0
             stage = "архивирован / нет активного"
         confirmed = len(self.repository.latest_predictions(round_.round_id)) if round_ else 0
         deadline = f"{round_.deadline_msk:%d.%m %H:%M} МСК" if round_ else "—"
-        self.telegram.send_message(chat_id, "🛠️ Админские команды\n" + "\n".join(action_lines) + f"\n\n🏟️ Текущий тур: {round_.round_id if round_ else 'нет (последний архивирован)'}\n📍 Этап: {stage}\n⏰ Дедлайн: {deadline}\n⚽ Матчей: {len(round_.fixtures) if round_ else 0}\n📝 Подтверждено прогнозов: {confirmed}\n📊 Результаты: {result_count}/{len(round_.fixtures) if round_ else 0}\n\nВыберите доступное действие:", _keyboard(buttons))
+        self._admin_card(
+            chat_id,
+            message_id,
+            f"🛠️ Админские команды\n"
+            f"🏟️ Тур: {round_.round_id if round_ else 'нет'} · {stage}\n"
+            f"⏰ {deadline}\n"
+            f"📝 Прогнозы: {confirmed} · 📊 Результаты: {result_count}/{len(round_.fixtures) if round_ else 0}",
+            _keyboard(buttons),
+        )
+
+    def _admin_management(self, chat_id: int, telegram_id: str, message_id: int | None = None) -> None:
+        if not self._is_admin(telegram_id):
+            self.telegram.send_message(chat_id, "Команда доступна только администратору.")
+            return
+        self._clear_admin_actions(telegram_id)
+        people = {item.telegram_id: item for item in self.repository.participants()}
+        active_grants = {item.telegram_id: item for item in self.repository.active_admin_grants()}
+        lines = ["👥 Администраторы"]
+        for bootstrap_id in sorted(self.admin_ids):
+            participant = people.get(bootstrap_id)
+            lines.append(f"• {self._admin_label(participant)} — из защищённого env")
+        for grant in active_grants.values():
+            if grant.telegram_id not in self.admin_ids:
+                lines.append(f"• {self._admin_label(people.get(grant.telegram_id))} — назначен")
+        if len(lines) == 1:
+            lines.append("Пока нет зарегистрированных администраторов.")
+        revocable = [
+            item for item in active_grants.values()
+            if item.telegram_id not in self.admin_ids and item.telegram_id != telegram_id
+        ]
+        buttons = [("Добавить", "admin:admins:add:0")]
+        if revocable:
+            buttons.append(("Отозвать доступ", "admin:admins:revoke"))
+        buttons.append(("Назад в админ-меню", "admin:menu"))
+        self._admin_card(chat_id, message_id, "\n".join(lines), _keyboard(buttons))
+
+    def _admin_add_candidates(self, chat_id: int, telegram_id: str, message_id: int | None, page_value: str) -> None:
+        if not self._is_admin(telegram_id):
+            self.telegram.send_message(chat_id, "Команда доступна только администратору.")
+            return
+        try:
+            page = max(0, int(page_value))
+        except ValueError:
+            self._admin_action_stale(chat_id)
+            return
+        candidates = sorted(
+            (item for item in self.repository.participants() if not self._is_admin(item.telegram_id)),
+            key=lambda item: (item.display_name.casefold(), item.participant_id),
+        )
+        per_page = 8
+        page_count = max(1, (len(candidates) + per_page - 1) // per_page)
+        if page >= page_count:
+            self._admin_action_stale(chat_id)
+            return
+        self._clear_admin_actions(telegram_id)
+        subset = candidates[page * per_page:(page + 1) * per_page]
+        buttons: list[tuple[str, str]] = []
+        for item in subset:
+            token = self._issue_admin_action(
+                telegram_id, "grant-select", item.telegram_id, self.repository.admin_grant_revision(item.telegram_id)
+            )
+            buttons.append((self._admin_label(item), f"admin:admins:select:{token}"))
+        if page:
+            buttons.append(("◀️", f"admin:admins:add:{page - 1}"))
+        if page + 1 < page_count:
+            buttons.append(("▶️", f"admin:admins:add:{page + 1}"))
+        buttons.append(("Назад", "admin:admins"))
+        text = "➕ Добавить администратора\nВыберите зарегистрированного участника."
+        if not subset:
+            text += "\nНет доступных участников."
+        self._admin_card(chat_id, message_id, text, _keyboard(buttons))
+
+    def _admin_revoke_candidates(self, chat_id: int, telegram_id: str, message_id: int | None) -> None:
+        if not self._is_admin(telegram_id):
+            self.telegram.send_message(chat_id, "Команда доступна только администратору.")
+            return
+        people = {item.telegram_id: item for item in self.repository.participants()}
+        candidates = [
+            grant for grant in self.repository.active_admin_grants()
+            if grant.telegram_id not in self.admin_ids and grant.telegram_id != telegram_id
+        ]
+        self._clear_admin_actions(telegram_id)
+        buttons = []
+        for grant in candidates:
+            token = self._issue_admin_action(telegram_id, "revoke-select", grant.telegram_id, grant.revision)
+            buttons.append((self._admin_label(people.get(grant.telegram_id)), f"admin:admins:select:{token}"))
+        buttons.append(("Назад", "admin:admins"))
+        self._admin_card(
+            chat_id,
+            message_id,
+            "➖ Отозвать доступ\nBootstrap-администраторы из защищённого env здесь не изменяются.",
+            _keyboard(buttons),
+        )
+
+    def _admin_action_selected(self, chat_id: int, telegram_id: str, message_id: int | None, token: str) -> None:
+        if not self._is_admin(telegram_id):
+            self._admin_action_stale(chat_id)
+            return
+        action = self._take_admin_action(telegram_id, token)
+        if not action or action[0] not in {"grant-select", "revoke-select"}:
+            self._admin_action_stale(chat_id)
+            return
+        kind, target_id, expected_revision = action
+        participant = self.repository.get_participant(target_id)
+        if (
+            not participant
+            or target_id == telegram_id
+            or self.repository.admin_grant_revision(target_id) != expected_revision
+        ):
+            self._admin_action_stale(chat_id)
+            return
+        if kind == "grant-select":
+            if self._is_admin(target_id):
+                self._admin_action_stale(chat_id)
+                return
+            # Only one confirmation can remain live.  This prevents two
+            # rapid selections from the same stale candidate page creating
+            # unrelated grants in parallel.
+            self._clear_admin_actions(telegram_id)
+            confirmation = self._issue_admin_action(telegram_id, "grant-confirm", target_id, expected_revision)
+            text = f"Назначить {self._admin_label(participant)} администратором?"
+            buttons = [("Подтвердить", f"admin:admins:confirm:{confirmation}"), ("Назад", "admin:admins:add:0")]
+        else:
+            if target_id in self.admin_ids or not any(item.telegram_id == target_id for item in self.repository.active_admin_grants()):
+                self._admin_action_stale(chat_id)
+                return
+            self._clear_admin_actions(telegram_id)
+            confirmation = self._issue_admin_action(telegram_id, "revoke-confirm", target_id, expected_revision)
+            text = f"Отозвать доступ администратора у {self._admin_label(participant)}?"
+            buttons = [("Подтвердить отзыв", f"admin:admins:confirm:{confirmation}"), ("Назад", "admin:admins:revoke")]
+        self._admin_card(chat_id, message_id, text, _keyboard(buttons))
+
+    def _admin_action_confirmed(self, chat_id: int, telegram_id: str, message_id: int | None, token: str) -> None:
+        if not self._is_admin(telegram_id):
+            self._admin_action_stale(chat_id)
+            return
+        action = self._take_admin_action(telegram_id, token)
+        if not action or action[0] not in {"grant-confirm", "revoke-confirm"}:
+            self._admin_action_stale(chat_id)
+            return
+        kind, target_id, expected_revision = action
+        participant = self.repository.get_participant(target_id)
+        audit_actor = self._actor_fingerprint(telegram_id) or "unavailable"
+        if not participant or target_id == telegram_id:
+            self._admin_action_stale(chat_id)
+            return
+        if kind == "grant-confirm":
+            changed = self.repository.grant_admin(
+                target_id, participant.participant_id, audit_actor, self.now().isoformat(), expected_revision
+            )
+            if not changed:
+                self._admin_action_stale(chat_id)
+                return
+            text = f"{self._admin_label(participant)} назначен администратором."
+        else:
+            if target_id in self.admin_ids:
+                self._admin_action_stale(chat_id)
+                return
+            changed = self.repository.revoke_admin(target_id, audit_actor, self.now().isoformat(), expected_revision)
+            if not changed:
+                self._admin_action_stale(chat_id)
+                return
+            text = f"Доступ администратора для {self._admin_label(participant)} отозван."
+        self._clear_admin_actions(telegram_id)
+        self._admin_card(chat_id, message_id, text, _keyboard([("К администраторам", "admin:admins"), ("Назад в админ-меню", "admin:menu")]))
+
+    def _clear_admin_actions(self, telegram_id: str) -> None:
+        self.pending_admin_actions.pop(telegram_id, None)
+
+    def _issue_admin_action(self, telegram_id: str, action: str, target_id: str, expected_revision: str) -> str:
+        token = secrets.token_urlsafe(6)
+        self.pending_admin_actions.setdefault(telegram_id, {})[token] = (action, target_id, expected_revision)
+        return token
+
+    def _take_admin_action(self, telegram_id: str, token: str) -> tuple[str, str, str] | None:
+        actions = self.pending_admin_actions.get(telegram_id, {})
+        action = actions.pop(token, None)
+        if not actions:
+            self.pending_admin_actions.pop(telegram_id, None)
+        return action
+
+    def _admin_action_stale(self, chat_id: int) -> None:
+        self.telegram.send_message(chat_id, "Действие устарело или недоступно. Откройте /admin → «Администраторы».")
+
+    @staticmethod
+    def _admin_label(participant) -> str:
+        if not participant:
+            return "Зарегистрированный администратор"
+        return " ".join(participant.display_name.split())[:80] or "Участник"
 
     def _csv_format(self, chat_id: int, telegram_id: str) -> None:
         if not self._is_admin(telegram_id):
@@ -497,7 +795,7 @@ class BotService:
         missing = [item.display_name for item in people if item.participant_id not in submitted]
         self.telegram.send_message(chat_id, f"Тур {round_.round_id}: сдали {len(done)}/{len(people)}.\nСдали: {', '.join(done) or '—'}\nНе сдали: {', '.join(missing) or '—'}")
 
-    def _publish(self, chat_id: int, telegram_id: str) -> None:
+    def _publish(self, chat_id: int, telegram_id: str, message_id: int | None = None) -> None:
         if not self._is_admin(telegram_id):
             self.telegram.send_message(chat_id, "Недостаточно прав.")
             return
@@ -508,33 +806,180 @@ class BotService:
         if self.tournament_chat_id is None:
             self.telegram.send_message(chat_id, "TOURNAMENT_CHAT_ID не настроен.")
             return
-        predictions = self.repository.latest_predictions(round_.round_id)
-        names = {item.participant_id: item.display_name for item in self.repository.participants()}
-        revision = hashlib.sha256(repr((predictions, sorted(names.items()))).encode()).hexdigest()[:16]
-        operation_key = f"publish:{round_.round_id}:{revision}"
-        if self.repository.operation_done(operation_key):
-            self.telegram.send_message(chat_id, "Эта публикация уже обработана.")
-            return
-        popularity: dict[str, int] = {}
-        for index, prediction in enumerate(predictions, 1):
-            lines = [f"Купон: {names.get(prediction.participant_id, prediction.participant_id)}"]
-            for bet in prediction.bets:
-                events = ", ".join(f"{event.match_id} {event.market.value}" for event in bet.events)
-                lines.append(f"{bet.stake}: {events}")
-                for event in bet.events:
-                    key = f"{event.match_id} {event.market.value}"
-                    popularity[key] = popularity.get(key, 0) + 1
-            if not self._send_once(f"{operation_key}:coupon:{index}", lambda text="\n".join(lines): self._delivery_telegram.send_message(self.tournament_chat_id, text)):
-                self._recovery_notice(chat_id)
-                return
-        stats = "\n".join(f"{key}: {count}" for key, count in sorted(popularity.items(), key=lambda item: (-item[1], item[0]))) or "нет прогнозов"
-        if not self._send_once(f"{operation_key}:stats", lambda: self._delivery_telegram.send_message(self.tournament_chat_id, f"Статистика выбора:\n{stats}")):
+        if any(key.startswith(("publish-v2:", "publish-v3:", "publish-v4:", "publish-v5:", "publish-v6:", "publish-v7:")) for key in self.repository.pending_operations()):
             self._recovery_notice(chat_id)
             return
+        predictions = self.repository.latest_predictions(round_.round_id)
+        if not predictions:
+            self.telegram.send_message(chat_id, "Нет подтверждённых прогнозов для публикации.")
+            return
+        names = {item.participant_id: item.display_name for item in self.repository.participants()}
+        try:
+            revision = hashlib.sha256(repr(("v7-csv-bundle-selection-heatmap-layout", round_.checksum, predictions, sorted(names.items()))).encode()).hexdigest()[:16]
+            operation_key = f"publish-v7:{round_.round_id}:{revision}"
+            coupons_path = build_public_coupons_csv(self.output_dir, round_, predictions, self.repository.participants())
+        except Exception as error:
+            logging.getLogger(__name__).exception("publish_bundle_failed round_id=%s", round_.round_id)
+            self.telegram.send_message(chat_id, f"Публикация не начата: не удалось собрать материалы ({type(error).__name__}).")
+            return
+        if self.repository.operation_done(operation_key):
+            self._admin_menu(chat_id, telegram_id, message_id)
+            return
+        if not self._send_once(
+            f"{operation_key}:coupons-file",
+            lambda: self._delivery_telegram.send_document(
+                self.tournament_chat_id,
+                str(coupons_path),
+                f"🧾 Прогнозы тура {round_.round_id}\nУчастников: {len(predictions)}. Все купоны — в CSV.",
+            ),
+        ):
+            self._recovery_notice(chat_id)
+            return
+        chart_operation = f"{operation_key}:stats-chart"
+        if not self.repository.operation_done(chart_operation):
+            try:
+                chart, popularity_rows = build_popularity_chart(self.output_dir, round_, predictions)
+            except Exception as error:
+                logging.getLogger(__name__).exception("publish_png_failed round_id=%s", round_.round_id)
+                self.telegram.send_message(chat_id, f"Публикация не начата: не удалось собрать PNG ({type(error).__name__}).")
+                return
+            stats_caption = _top_stats_caption(round_.round_id, popularity_rows)
+            if not self._send_once(
+                chart_operation,
+                lambda: self._delivery_telegram.send_photo_bytes(self.tournament_chat_id, chart.filename, chart.content, stats_caption),
+            ):
+                self._recovery_notice(chat_id)
+                return
         self.repository.mark_operation_done(operation_key)
-        self.telegram.send_message(chat_id, "Купоны и агрегированная статистика опубликованы.")
+        self._admin_menu(chat_id, telegram_id, message_id)
 
-    def _result_matches(self, chat_id: int, telegram_id: str) -> None:
+    def _publish_interim(self, chat_id: int, telegram_id: str, message_id: int | None = None) -> None:
+        if not self._is_admin(telegram_id):
+            self.telegram.send_message(chat_id, "Недостаточно прав.")
+            return
+        round_ = self.repository.get_active_round()
+        if not round_ or self.now() < round_.deadline_msk:
+            self.telegram.send_message(chat_id, "Промежуточный рейтинг доступен только после дедлайна.")
+            return
+        if self.tournament_chat_id is None:
+            self.telegram.send_message(chat_id, "TOURNAMENT_CHAT_ID не настроен.")
+            return
+        if any(key.startswith(("interim-v1:", "interim-v2:", "interim-v3:", "interim-v4:", "interim-v5:", "interim-v6:", "interim-v7:")) for key in self.repository.pending_operations()):
+            self._recovery_notice(chat_id)
+            return
+        predictions = self.repository.latest_predictions(round_.round_id)
+        results = self.repository.results(round_.round_id)
+        if not predictions:
+            self.telegram.send_message(chat_id, "Нет подтверждённых прогнозов для расчёта.")
+            return
+        if not results:
+            self.telegram.send_message(chat_id, "Сначала внесите результат хотя бы одного матча.")
+            return
+        if len(results) >= len(round_.fixtures):
+            self.telegram.send_message(chat_id, "Все результаты внесены — используйте финальный скоринг.")
+            return
+        names = {item.participant_id: item.display_name for item in self.repository.participants()}
+        try:
+            interim_path, leaderboard = build_interim_results_export(
+                self.output_dir, round_, predictions, results, self.repository.participants()
+            )
+        except Exception as error:
+            logging.getLogger(__name__).exception("interim_bundle_failed round_id=%s", round_.round_id)
+            self.telegram.send_message(chat_id, f"Публикация не начата: не удалось собрать CSV ({type(error).__name__}).")
+            return
+        caption = _interim_caption(round_.round_id, len(results), len(round_.fixtures), leaderboard, names)
+        normalized_results = tuple(
+            (
+                result.match_id,
+                tuple(sorted(market.value for market in result.winning_markets)),
+                tuple(sorted(market.value for market in result.returned_markets)),
+            )
+            for result in sorted(results, key=lambda item: item.match_id)
+        )
+        revision = hashlib.sha256(
+            repr(("interim-v7-layout-no-outcome-caption", round_.checksum, predictions, normalized_results, sorted(names.items()))).encode()
+        ).hexdigest()[:16]
+        operation_key = f"interim-v7:{round_.round_id}:{revision}"
+        if self.repository.operation_done(operation_key):
+            self._admin_menu(chat_id, telegram_id, message_id)
+            return
+        if not self._send_once(
+            f"{operation_key}:group-document",
+            lambda: self._delivery_telegram.send_document(
+                self.tournament_chat_id, str(interim_path), caption, parse_mode="HTML"
+            ),
+        ):
+            self._recovery_notice(chat_id)
+            return
+        chart_operation = f"{operation_key}:outcome-chart"
+        if not self.repository.operation_done(chart_operation):
+            try:
+                outcome_chart = build_outcome_chart(self.output_dir, round_, predictions, results)
+            except Exception as error:
+                logging.getLogger(__name__).exception("interim_png_failed round_id=%s", round_.round_id)
+                self.telegram.send_message(chat_id, f"Публикация не начата: не удалось собрать PNG ({type(error).__name__}).")
+                return
+            if not self._send_once(
+                chart_operation,
+                lambda: self._delivery_telegram.send_photo_bytes(
+                    self.tournament_chat_id,
+                    outcome_chart.filename,
+                    outcome_chart.content,
+                    "",
+                ),
+            ):
+                self._recovery_notice(chat_id)
+                return
+        self.repository.mark_operation_done(operation_key)
+        self._admin_menu(chat_id, telegram_id, message_id)
+
+    def _export_predictions(self, chat_id: int, telegram_id: str) -> None:
+        if not self._is_admin(telegram_id):
+            self.telegram.send_message(chat_id, "Недостаточно прав.")
+            return
+        round_ = self.repository.get_active_round()
+        if not round_:
+            self.telegram.send_message(chat_id, "Активного тура нет.")
+            return
+        predictions = self.repository.latest_predictions(round_.round_id)
+        if not predictions:
+            self.telegram.send_message(chat_id, "В активном туре пока нет подтверждённых прогнозов.")
+            return
+        path = build_predictions_export(self.output_dir, round_, predictions, self.repository.participants())
+        self._delivery_telegram.send_document(
+            chat_id,
+            str(path),
+            f"predictions_{round_.round_id}.csv",
+        )
+        self.telegram.send_message(
+            chat_id,
+            "CSV выгружен в длинном формате: игрок → ставка → событие. Telegram ID в файл не включён.",
+            _keyboard([("Назад в админ-меню", "admin:menu")]),
+        )
+
+    def _admin_card(self, chat_id: int, message_id: int | None, text: str, reply_markup: dict) -> None:
+        if message_id is None:
+            self._delivery_telegram.send_message(chat_id, text, reply_markup)
+            return
+        try:
+            self._delivery_telegram.edit_message(chat_id, message_id, text, reply_markup)
+        except TelegramHttpError as error:
+            if error.kind != "message_not_modified":
+                raise
+        except UnknownDeliveryError:
+            # An edit may already have reached Telegram.  A send fallback would
+            # recreate precisely the duplicate admin cards this flow prevents.
+            logging.getLogger(__name__).warning("telegram_admin_card_edit_unknown no_fallback=true")
+            raise
+
+    def _result_fixture(self, telegram_id: str, match_id: str) -> tuple[Round | None, Fixture | None]:
+        if not self._is_admin(telegram_id):
+            return None, None
+        round_ = self.repository.get_active_round()
+        fixture = next((item for item in round_.fixtures if item.match_id == match_id), None) if round_ else None
+        return round_, fixture
+
+    def _result_matches(self, chat_id: int, telegram_id: str, message_id: int | None = None, notice: str = "") -> None:
         if not self._is_admin(telegram_id):
             self.telegram.send_message(chat_id, "Недостаточно прав.")
             return
@@ -545,54 +990,89 @@ class BotService:
         saved = {item.match_id for item in self.repository.results(round_.round_id)}
         buttons = [(f"{'✓ ' if item.match_id in saved else ''}{item.home_team} — {item.away_team}", f"admin:result:{item.match_id}") for item in round_.fixtures]
         buttons.append(("Назад в админ-меню", "admin:menu"))
-        self.telegram.send_message(chat_id, "Выберите матч для результата:", _keyboard(buttons))
+        prefix = f"{notice}\n\n" if notice else ""
+        self._admin_card(chat_id, message_id, prefix + f"🧾 Результаты тура {round_.round_id}\n✓ Внесено: {len(saved)}/{len(round_.fixtures)}\n\nВыберите матч:", _keyboard(buttons))
 
-    def _result_editor(self, chat_id: int, telegram_id: str, match_id: str) -> None:
-        if not self._is_admin(telegram_id):
+    def _result_editor(self, chat_id: int, telegram_id: str, match_id: str, message_id: int | None = None, notice: str = "") -> None:
+        round_, fixture = self._result_fixture(telegram_id, match_id)
+        if not round_ or not fixture:
+            self._admin_card(chat_id, message_id, "Матч не относится к активному туру.", _keyboard([("К матчам", "admin:results")]))
             return
-        winners, returns = self.result_drafts.get((telegram_id, match_id), (set(), set()))
-        buttons = [(f"{'✓ ' if market in winners else ''}{market.value}", f"admin:toggle:{match_id}:{market.value}") for market in Market]
-        buttons += [(f"{'↩ ' if market in returns else ''}Возврат {market.value}", f"admin:return-market:{match_id}:{market.value}") for market in Market]
-        buttons += [("Возврат всех рынков", f"admin:return:{match_id}"), ("Сохранить результат", f"admin:save-result:{match_id}"), ("Назад к матчам", "admin:results")]
-        self.telegram.send_message(chat_id, f"{match_id}: выберите зашедшие рынки. Выбрано: {', '.join(item.value for item in winners) or '—'}; возврат: {', '.join(item.value for item in returns) or '—'}. Для исхода сохраните канонический набор: П1+1Х, Х+1Х+Х2 или П2+Х2; выберите ровно один ТБ/ТМ. Возврат отдельного рынка — кнопка «Возврат …».", _keyboard(buttons))
+        self.result_drafts[(telegram_id, match_id)] = ResultScoreDraft()
+        text = f"⚽ {fixture.home_team} — {fixture.away_team}\n\nГолы: {fixture.home_team}\nВыберите количество:"
+        if notice:
+            text = f"{notice}\n\n{text}"
+        self._admin_card(chat_id, message_id, text, _goal_keyboard("admin:home-goals", match_id))
 
-    def _toggle_result(self, chat_id: int, telegram_id: str, match_id: str, market: Market) -> None:
-        winners, returns = self.result_drafts.setdefault((telegram_id, match_id), (set(), set()))
-        if market in winners:
-            winners.remove(market)
-        else:
-            winners.add(market)
-        self._result_editor(chat_id, telegram_id, match_id)
-
-    def _return_match(self, chat_id: int, telegram_id: str, match_id: str) -> None:
-        self.result_drafts[(telegram_id, match_id)] = (set(), set(Market))
-        self._result_editor(chat_id, telegram_id, match_id)
-
-    def _toggle_return(self, chat_id: int, telegram_id: str, match_id: str, market: Market) -> None:
-        winners, returns = self.result_drafts.setdefault((telegram_id, match_id), (set(), set()))
-        if market in returns:
-            returns.remove(market)
-        else:
-            returns.add(market)
-        self._result_editor(chat_id, telegram_id, match_id)
-
-    def _save_result(self, chat_id: int, telegram_id: str, match_id: str) -> None:
-        if not self._is_admin(telegram_id):
+    def _select_home_goals(self, chat_id: int, telegram_id: str, match_id: str, token: str, message_id: int | None) -> None:
+        round_, fixture = self._result_fixture(telegram_id, match_id)
+        if not round_ or not fixture:
+            self._result_matches(chat_id, telegram_id, message_id, "Матч больше не относится к активному туру.")
             return
-        round_ = self.repository.get_active_round()
-        if not round_ or match_id not in {item.match_id for item in round_.fixtures}:
-            self.telegram.send_message(chat_id, "Матч не относится к активному туру.")
-            return
-        winners, returns = self.result_drafts.get((telegram_id, match_id), (set(), set()))
         try:
-            from .validators import ensure_results_compatible
-            ensure_results_compatible(winners, returns)
-        except ValidationError as error:
-            self.telegram.send_message(chat_id, f"Результат не сохранён: {error}")
+            choice = GoalChoice.from_token(token)
+        except ValueError:
+            self._result_editor(chat_id, telegram_id, match_id, message_id, "Некорректное значение. Выберите счёт кнопкой.")
             return
-        self.repository.save_result(BetResult(match_id, frozenset(winners), frozenset(returns)), round_.round_id)
+        self.result_drafts[(telegram_id, match_id)] = ResultScoreDraft(home=choice)
+        text = f"⚽ {fixture.home_team} — {fixture.away_team}\n\nСчёт: {fixture.home_team} {choice.label} — ? {fixture.away_team}\nГолы: {fixture.away_team}\nВыберите количество:"
+        self._admin_card(chat_id, message_id, text, _goal_keyboard("admin:away-goals", match_id))
+
+    def _select_away_goals(self, chat_id: int, telegram_id: str, match_id: str, token: str, message_id: int | None) -> None:
+        round_, fixture = self._result_fixture(telegram_id, match_id)
+        draft = self.result_drafts.get((telegram_id, match_id))
+        if not round_ or not fixture or not draft or draft.home is None:
+            self._result_editor(chat_id, telegram_id, match_id, message_id, "Экран устарел. Укажите счёт заново.")
+            return
+        try:
+            away = GoalChoice.from_token(token)
+        except ValueError:
+            self._result_editor(chat_id, telegram_id, match_id, message_id, "Некорректное значение. Укажите счёт заново.")
+            return
+        draft.away = away
+        if draft.home.is_five_plus and away.is_five_plus:
+            rows = [[
+                {"text": "П1", "callback_data": f"admin:score-outcome:{match_id}:{Market.P1.value}"},
+                {"text": "Х", "callback_data": f"admin:score-outcome:{match_id}:{Market.X.value}"},
+                {"text": "П2", "callback_data": f"admin:score-outcome:{match_id}:{Market.P2.value}"},
+            ], [
+                {"text": "↩️ Возврат матча", "callback_data": f"admin:return:{match_id}"},
+                {"text": "← К матчам", "callback_data": "admin:results"},
+            ]]
+            self._admin_card(chat_id, message_id, f"⚽ {fixture.home_team} — {fixture.away_team}\n\nСчёт: 5+ — 5+\nУкажите исход матча:", {"inline_keyboard": rows})
+            return
+        self._persist_score_result(chat_id, telegram_id, fixture, draft, message_id)
+
+    def _select_score_outcome(self, chat_id: int, telegram_id: str, match_id: str, outcome: Market, message_id: int | None) -> None:
+        round_, fixture = self._result_fixture(telegram_id, match_id)
+        draft = self.result_drafts.get((telegram_id, match_id))
+        if not round_ or not fixture or not draft or not draft.home or not draft.away:
+            self._result_editor(chat_id, telegram_id, match_id, message_id, "Экран устарел. Укажите счёт заново.")
+            return
+        self._persist_score_result(chat_id, telegram_id, fixture, draft, message_id, outcome)
+
+    def _persist_score_result(self, chat_id: int, telegram_id: str, fixture: Fixture, draft: ResultScoreDraft, message_id: int | None, outcome: Market | None = None) -> None:
+        if draft.home is None or draft.away is None:
+            self._result_editor(chat_id, telegram_id, fixture.match_id, message_id, "Экран устарел. Укажите счёт заново.")
+            return
+        try:
+            result = settle_score(fixture, draft.home, draft.away, outcome)
+        except ValueError:
+            self._result_editor(chat_id, telegram_id, fixture.match_id, message_id, "Для этой линии счёт 5+ неоднозначен. Выберите точный счёт до 4 или возврат матча.")
+            return
+        self.repository.save_result(result, fixture.round_id)
+        score = f"{draft.home.label}:{draft.away.label}"
+        self.result_drafts.pop((telegram_id, fixture.match_id), None)
+        self._result_matches(chat_id, telegram_id, message_id, f"✅ {fixture.home_team} — {fixture.away_team}: {score}")
+
+    def _return_match(self, chat_id: int, telegram_id: str, match_id: str, message_id: int | None = None) -> None:
+        round_, fixture = self._result_fixture(telegram_id, match_id)
+        if not round_ or not fixture:
+            self._result_matches(chat_id, telegram_id, message_id, "Матч больше не относится к активному туру.")
+            return
+        self.repository.save_result(BetResult(match_id, frozenset(), frozenset(Market)), round_.round_id)
         self.result_drafts.pop((telegram_id, match_id), None)
-        self.telegram.send_message(chat_id, f"Результат {match_id} сохранён.")
+        self._result_matches(chat_id, telegram_id, message_id, f"↩️ {fixture.home_team} — {fixture.away_team}: возврат")
 
     def _score(self, chat_id: int, telegram_id: str) -> None:
         if not self._is_admin(telegram_id):
@@ -606,8 +1086,15 @@ class BotService:
         if {item.match_id for item in results} != {item.match_id for item in round_.fixtures}:
             self.telegram.send_message(chat_id, "Скоринг заблокирован: внесены результаты не для всех матчей.")
             return
-        paths = build_reports(self.output_dir, round_.round_id, self.repository.latest_predictions(round_.round_id), results, self.repository.participants(), self.now())
-        operation_key = f"score:{round_.round_id}:{paths['scoring'].parent.name}"
+        if any(key.startswith(("score:", "score-v2:", "score-v3:", "score-v4:")) for key in self.repository.pending_operations()):
+            self._recovery_notice(chat_id)
+            return
+        predictions = self.repository.latest_predictions(round_.round_id)
+        paths = build_reports(
+            self.output_dir, round_.round_id, predictions, results, self.repository.participants(), self.now(),
+            include_charts=False,
+        )
+        operation_key = f"score-v4:{round_.round_id}:{paths['scoring'].parent.name}"
         if self.repository.operation_done(operation_key):
             self.telegram.send_message(chat_id, "Этот scoring уже обработан.")
             return
@@ -615,24 +1102,32 @@ class BotService:
             self._recovery_notice(chat_id)
             return
         if self.tournament_chat_id is not None:
-            import csv
-            with paths["leaderboard"].open(encoding="utf-8", newline="") as source:
-                rows = list(csv.DictReader(source))
-            ranking_lines = ["Рейтинг рассчитан:"] + [f"{row['rank']}. {row['display_name']} — {row['gross_payout']}" for row in rows]
-            for index, chunk in enumerate(_chunks(ranking_lines, 3500), 1):
-                if not self._send_once(f"{operation_key}:ranking:{index}", lambda text="\n".join(chunk): self._delivery_telegram.send_message(self.tournament_chat_id, text)):
-                    self._recovery_notice(chat_id)
-                    return
-            if not self._send_once(f"{operation_key}:group-board", lambda: self._delivery_telegram.send_document(self.tournament_chat_id, str(paths["leaderboard"]), "leaderboard.csv")):
+            if not self._send_once(f"{operation_key}:group-board", lambda: self._delivery_telegram.send_document(self.tournament_chat_id, str(paths["public_leaderboard"]), "final_leaderboard.csv")):
                 self._recovery_notice(chat_id)
                 return
-            chart_captions = {
-                "chart_leaderboard": "Рейтинг валовых выплат",
-                "chart_bet_types": "Выплаты по типам ставок",
-                "chart_popularity": "Популярность событий и распределение банка",
-            }
-            for key in ("chart_leaderboard", "chart_bet_types", "chart_popularity"):
-                if not self._send_once(f"{operation_key}:{key}", lambda key=key: self._delivery_telegram.send_photo(self.tournament_chat_id, str(paths[key]), chart_captions[key])):
+            leaderboard_operation = f"{operation_key}:chart-leaderboard"
+            if not self.repository.operation_done(leaderboard_operation):
+                leaderboard_chart = render_report_chart(paths["chart_spec"], "chart_leaderboard")
+                if not self._send_once(
+                    leaderboard_operation,
+                    lambda: self._delivery_telegram.send_photo_bytes(
+                        self.tournament_chat_id, leaderboard_chart.filename, leaderboard_chart.content, "Итоговый рейтинг валовых выплат"
+                    ),
+                ):
+                    self._recovery_notice(chat_id)
+                    return
+            outcome_operation = f"{operation_key}:outcome-chart"
+            if not self.repository.operation_done(outcome_operation):
+                outcome_chart = build_outcome_chart(self.output_dir, round_, predictions, results, final=True)
+                if not self._send_once(
+                    outcome_operation,
+                    lambda: self._delivery_telegram.send_photo_bytes(
+                        self.tournament_chat_id,
+                        outcome_chart.filename,
+                        outcome_chart.content,
+                        "",
+                    ),
+                ):
                     self._recovery_notice(chat_id)
                     return
         self.repository.mark_operation_done(operation_key)
@@ -666,10 +1161,14 @@ class BotService:
             try:
                 draft = self._draft_from_snapshot(snapshot)
                 round_ = self.repository.get_active_round()
-                if not round_ or round_.round_id != draft.round_id or self.now() >= round_.deadline_msk:
+                if not round_ or round_.round_id != draft.round_id:
                     self.draft_store.delete(participant.telegram_id)
                     continue
+                if self.now() >= round_.deadline_msk:
+                    draft.phase = "L0"
                 self.drafts[participant.telegram_id] = draft
+                if draft.phase == "L0":
+                    self._save_draft(participant.telegram_id)
             except (KeyError, TypeError, ValueError):
                 self.draft_store.delete(participant.telegram_id)
 
@@ -744,6 +1243,10 @@ class BotService:
         draft = self._draft(telegram_id)
         if not draft:
             return
+        reanchor = _reanchor_context.get()
+        if reanchor and reanchor[0] == draft.draft_id:
+            self._reanchor_draft_screen(chat_id, telegram_id, text, buttons, back, cancel, reanchor[1], reanchor[2])
+            return
         markup = self._draft_keyboard(draft, buttons, back, cancel)
         if draft.active_message_id is not None:
             try:
@@ -776,6 +1279,56 @@ class BotService:
         if isinstance(message_id, int):
             draft.active_message_id = message_id
         self._save_draft(telegram_id)
+
+    def _reanchor_draft_screen(self, chat_id: int, telegram_id: str, text: str, buttons: list[tuple[str, str]] | list[list[tuple[str, str]]], back: bool, cancel: bool, action: str, phase_before: str) -> None:
+        """Durably invalidate then send one successor without blind retry."""
+        draft = self._draft(telegram_id)
+        if not draft:
+            return
+        card_from, revision_before = draft.active_message_id, draft.revision
+        pending_before, predecessor_before = draft.reanchor_pending, draft.reanchor_predecessor_id
+        draft.revision = revision_before + 1
+        draft.active_message_id = None
+        draft.reanchor_pending = True
+        draft.reanchor_predecessor_id = card_from
+        markup = self._draft_keyboard(draft, buttons, back, cancel)
+        try:
+            # This intent is the crash boundary: after it reaches disk, the
+            # predecessor can no longer pass the revision/card guard.
+            self._save_draft(telegram_id)
+        except Exception:
+            draft.revision, draft.active_message_id = revision_before, card_from
+            draft.reanchor_pending, draft.reanchor_predecessor_id = pending_before, predecessor_before
+            self._trace_draft(telegram_id, action, draft, phase_before, card_from, None, "intent_save_failed")
+            raise
+        if card_from is not None:
+            self.telegram.clear_keyboard(chat_id, card_from)
+        try:
+            message_id = self._delivery_telegram.send_message(chat_id, text, markup)
+        except UnknownDeliveryError:
+            self._trace_draft(telegram_id, action, draft, phase_before, card_from, None, "unknown_delivery")
+            raise
+        except Exception:
+            self._trace_draft(telegram_id, action, draft, phase_before, card_from, None, "send_failed")
+            raise
+        if not isinstance(message_id, int):
+            self._trace_draft(telegram_id, action, draft, phase_before, card_from, None, "missing_message_id")
+            raise RuntimeError("Telegram successor card has no message_id")
+        draft.active_message_id = message_id
+        draft.reanchor_pending = False
+        draft.reanchor_predecessor_id = None
+        try:
+            self._save_draft(telegram_id)
+        except Exception:
+            # Keep the durable intent authoritative. The accepted successor
+            # may exist, but its id was not committed and must not be retried.
+            draft.active_message_id = None
+            draft.reanchor_pending = True
+            draft.reanchor_predecessor_id = card_from
+            self.telegram.clear_keyboard(chat_id, message_id)
+            self._trace_draft(telegram_id, action, draft, phase_before, card_from, message_id, "successor_commit_failed")
+            raise
+        self._trace_draft(telegram_id, action, draft, phase_before, card_from, message_id, "success")
 
     def _begin_prediction(self, chat_id: int, telegram_id: str) -> None:
         round_ = self.repository.get_active_round()
@@ -1024,7 +1577,7 @@ class BotService:
             return None
         if self.now() >= round_.deadline_msk:
             draft.phase = "L0"
-            self._touch(telegram_id)
+            self._save_draft(telegram_id)
             return "deadline"
         return action
 
@@ -1036,9 +1589,11 @@ class BotService:
 
     def _draft_snapshot(self, telegram_id: str, draft: Draft) -> dict:
         return {
-            "version": 3, "draft_id": draft.draft_id, "participant_id": telegram_id,
+            "version": 4, "draft_id": draft.draft_id, "participant_id": telegram_id,
             "chat_id": draft.chat_id, "round_id": draft.round_id, "state": "active",
             "revision": draft.revision, "active_message_id": draft.active_message_id,
+            "reanchor_pending": draft.reanchor_pending,
+            "reanchor_predecessor_id": draft.reanchor_predecessor_id,
             "structure": list(draft.structure),
             "bets": [{"type": bet.bet_type.value, "stake": bet.stake, "bet_id": bet.bet_id, "events": [self._event_snapshot(event) for event in bet.events]} for bet in draft.bets],
             "current_events": [self._event_snapshot(event) for event in draft.current_events],
@@ -1060,6 +1615,8 @@ class BotService:
             current_events=[event(item) for item in value["current_events"]],
             selected_match_id=value["selected_match_id"], phase=value["phase"], draft_id=value["draft_id"],
             revision=value["revision"], chat_id=value["chat_id"], active_message_id=value["active_message_id"],
+            reanchor_pending=bool(value.get("reanchor_pending", False)),
+            reanchor_predecessor_id=value.get("reanchor_predecessor_id"),
             expresses=[[event(item) for item in express] for express in value["expresses"]],
             express_index=value["express_index"], event_page=value["event_page"], match_page=value["match_page"],
             replacement=value["replacement"], replacement_kind=value.get("replacement_kind", "full" if value["replacement"] else "new"),
@@ -1094,7 +1651,7 @@ class BotService:
             if self.now() >= round_.deadline_msk:
                 self._deadline_screen(chat_id, telegram_id)
             else:
-                self._render_current(chat_id, telegram_id)
+                self._reanchor_current(chat_id, telegram_id, "predict_reanchor")
             return
         participant = self.repository.get_participant(telegram_id)
         if participant and self.repository.get_prediction(round_.round_id, participant.participant_id):
@@ -1200,10 +1757,127 @@ class BotService:
 
     def _resume_draft(self, chat_id: int, telegram_id: str) -> None:
         draft = self._draft(telegram_id)
+        if draft and self._deadline_guard(chat_id, telegram_id, draft):
+            return
         if draft and draft.phase in {"C0", "M1"}:
             draft.phase = draft.return_phase
             self._touch(telegram_id)
-        self._render_current(chat_id, telegram_id)
+        if draft:
+            self._reanchor_current(chat_id, telegram_id, "resume_reanchor")
+        else:
+            self._menu(chat_id, "Черновик не найден.")
+
+    def _deadline_guard(self, chat_id: int, telegram_id: str, draft: Draft | None = None) -> bool:
+        draft = draft or self._draft(telegram_id)
+        round_ = self.repository.get_active_round()
+        if not draft or not round_ or draft.round_id != round_.round_id or self.now() < round_.deadline_msk:
+            return False
+        self._deadline_screen(chat_id, telegram_id)
+        return True
+
+    def _reanchor_current(self, chat_id: int, telegram_id: str, action: str) -> None:
+        draft = self._draft(telegram_id)
+        if not draft:
+            self._menu(chat_id, "Черновик не найден.")
+            return
+        if self._deadline_guard(chat_id, telegram_id, draft):
+            return
+        marker = _reanchor_context.set((draft.draft_id, action, draft.phase))
+        try:
+            self._render_current(chat_id, telegram_id)
+        finally:
+            _reanchor_context.reset(marker)
+
+    @staticmethod
+    def _draft_progress(draft: Draft) -> str:
+        phase = {
+            "E1": "выбор матчей",
+            "E2": "выбор события",
+            "E3": "проверка выбранных событий",
+            "X0": "выбор схемы экспрессов",
+            "X1": "сборка экспресса",
+            "X2": "проверка экспрессов",
+            "B1": "распределение сумм",
+            "B2": "проверка новых сумм",
+            "W1": "подтверждение изменения",
+            "P1": "предпросмотр",
+            "C0": "подтверждение отмены",
+        }.get(draft.phase, "продолжение черновика")
+        placed = len([bet for bet in draft.bets if bet.stake is not None])
+        return f"Этап: {phase}.\nСобытия: {len(draft.current_events)} из 6–9 · суммы: {placed}/5."
+
+    def _draft_token_matches(self, telegram_id: str, chat_id: int, draft_id: str, revision: str) -> Draft | None:
+        draft = self._draft(telegram_id)
+        try:
+            revision_value = int(revision)
+        except ValueError:
+            return None
+        if not draft or (draft.draft_id, draft.revision, draft.chat_id) != (draft_id, revision_value, chat_id):
+            return None
+        return draft
+
+    def _resume_from_my(self, chat_id: int, telegram_id: str, data: str) -> None:
+        try:
+            _, _, draft_id, revision = data.split(":", 3)
+        except ValueError:
+            return
+        if not self._draft_token_matches(telegram_id, chat_id, draft_id, revision):
+            self.telegram.send_message(chat_id, "Черновик уже изменился. Откройте /my.")
+            return
+        if self._deadline_guard(chat_id, telegram_id):
+            return
+        self._resume_draft(chat_id, telegram_id)
+
+    def _request_draft_restart(self, chat_id: int, telegram_id: str, data: str) -> None:
+        try:
+            _, _, _, draft_id, revision = data.split(":", 4)
+        except ValueError:
+            return
+        draft = self._draft_token_matches(telegram_id, chat_id, draft_id, revision)
+        if not draft:
+            self.telegram.send_message(chat_id, "Черновик уже изменился. Откройте /my.")
+            return
+        if self._deadline_guard(chat_id, telegram_id, draft):
+            return
+        self._trace_draft(telegram_id, "restart_requested", draft, draft.phase, draft.active_message_id, draft.active_message_id, "awaiting_confirmation")
+        self.telegram.send_message(
+            chat_id,
+            "Начать заново? Незавершённый черновик будет удалён только после подтверждения.",
+            _keyboard([
+                ("🗑 Удалить и начать заново", f"draft:restart:yes:{draft.draft_id}:{draft.revision}"),
+                ("← Оставить черновик", f"draft:restart:no:{draft.draft_id}:{draft.revision}"),
+            ]),
+        )
+
+    def _confirm_draft_restart(self, chat_id: int, telegram_id: str, data: str) -> None:
+        try:
+            _, _, _, draft_id, revision = data.split(":", 4)
+        except ValueError:
+            return
+        draft = self._draft_token_matches(telegram_id, chat_id, draft_id, revision)
+        if not draft:
+            self.telegram.send_message(chat_id, "Черновик уже изменился. Откройте /my.")
+            return
+        if self._deadline_guard(chat_id, telegram_id, draft):
+            return
+        phase_before, card_from = draft.phase, draft.active_message_id
+        if card_from is not None:
+            self.telegram.clear_keyboard(chat_id, card_from)
+        self._discard_draft(telegram_id)
+        self._begin_prediction(chat_id, telegram_id)
+        self._trace_draft(telegram_id, "restart_confirmed", draft, phase_before, card_from, None, "success")
+
+    def _decline_draft_restart(self, chat_id: int, telegram_id: str, data: str) -> None:
+        try:
+            _, _, _, draft_id, revision = data.split(":", 4)
+        except ValueError:
+            return
+        if not self._draft_token_matches(telegram_id, chat_id, draft_id, revision):
+            self.telegram.send_message(chat_id, "Черновик уже изменился. Откройте /my.")
+            return
+        if self._deadline_guard(chat_id, telegram_id):
+            return
+        self._show_my(chat_id, telegram_id)
 
     def _render_current(self, chat_id: int, telegram_id: str) -> None:
         draft = self._draft(telegram_id)
@@ -1236,7 +1910,7 @@ class BotService:
 
     @staticmethod
     def _match_label(fixture, selected: bool) -> str:
-        return f"{'✅ ' if selected else ''}{fixture.home_team} — {fixture.away_team} · {fixture.kickoff_msk:%d.%m}"
+        return compact_match_label(fixture, selected)
 
     @staticmethod
     def _match_pages(round_: Round) -> list[list]:
@@ -1269,7 +1943,7 @@ class BotService:
         pages = self._match_pages(round_)
         draft.match_page = min(draft.match_page, len(pages) - 1)
         page = pages[draft.match_page]
-        buttons = [[(self._match_label(item, item.match_id in selected), f"match:{item.match_id}") for item in page[index:index + 2]] for index in range(0, len(page), 2)]
+        buttons = [[(self._match_label(item, item.match_id in selected), f"match:{item.match_id}")] for item in page]
         complete = ("✅ Завершить", "finish-events") if len(draft.current_events) >= 6 else ("✅ 6+ событий", "need6")
         buttons.append([("◀️", "page:m:-1"), ("▶️", "page:m:+1"), complete, ("✖️", "cancel")])
         chosen = "\n".join(f"• {self._event_label(round_, item)}" for item in draft.current_events)
@@ -1779,7 +2453,23 @@ class BotService:
         if not participant: self.telegram.send_message(chat_id, "Сначала выполните /start."); return
         if not round_: self.telegram.send_message(chat_id, "Вы зарегистрированы. Сейчас нет открытого тура."); return
         prediction = self.repository.get_prediction(round_.round_id, participant.participant_id)
+        draft = self._draft(telegram_id)
+        if draft and draft.round_id == round_.round_id and draft.chat_id == chat_id and self._deadline_guard(chat_id, telegram_id, draft):
+            return
         if not prediction:
+            if draft and draft.round_id == round_.round_id and draft.chat_id == chat_id:
+                recovery = "\n⚠️ Карточка восстановления не была подтверждена. Нажмите «Продолжить черновик», чтобы создать новый экран." if draft.reanchor_pending else ""
+                self._trace_draft(telegram_id, "my_draft_visible", draft, draft.phase, draft.active_message_id, draft.active_message_id, "success")
+                self.telegram.send_message(
+                    chat_id,
+                    "📝 Есть незавершённый черновик.\n"
+                    + self._draft_progress(draft) + recovery,
+                    _keyboard([
+                        ("▶️ Продолжить черновик", f"draft:resume:{draft.draft_id}:{draft.revision}"),
+                        ("🔄 Начать заново", f"draft:restart:ask:{draft.draft_id}:{draft.revision}"),
+                    ]),
+                )
+                return
             self.telegram.send_message(chat_id, "Прогноз ещё не подтверждён.", _keyboard([("📝 Собрать прогноз", "menu:new")])); return
         lines = ["🔒 Мой прогноз", f"\n🏟️ Тур: {round_.round_id}", f"⏰ Дедлайн: {round_.deadline_msk:%d.%m %H:%M}", "✅ Статус: подтверждён"]
         for bet in prediction.bets:
@@ -1787,7 +2477,6 @@ class BotService:
             title = "ОРДИНАР" if bet.bet_type == BetType.SINGLE else "ЭКСПРЕСС"
             lines += [f"\n{title}"] + [f"⚽ {self._event_label(round_, item)}" for item in bet.events] + [f"💵 {bet.stake} × {odds} = {(Decimal(bet.stake) * odds).quantize(Decimal('1'), rounding=ROUND_HALF_UP)}"]
         lines.append("Итого банк: 5 000")
-        draft = self._draft(telegram_id)
         if draft and draft.round_id == round_.round_id and draft.chat_id == chat_id:
             if draft.replacement_kind == "correction":
                 lines.append("✏️ Есть черновик корректировок. Подтверждённый прогноз пока не изменён.")
@@ -1846,8 +2535,25 @@ class BotService:
     def _deadline_screen(self, chat_id: int, telegram_id: str) -> None:
         draft = self._draft(telegram_id)
         if not draft: self._menu(chat_id, "Дедлайн прошёл."); return
-        draft.phase = "L0"; self._save_draft(telegram_id)
-        self._draft_screen(chat_id, telegram_id, "⏰ Дедлайн прошёл. Этот черновик нельзя подтвердить.", [("🔒 Мой прогноз", "menu:my"), ("✖️ Закрыть", "cancel:yes")])
+        draft.phase = "L0"
+        self._save_draft(telegram_id)
+        text = "⏰ Дедлайн прошёл. Этот черновик нельзя подтвердить."
+        if draft.active_message_id is None:
+            # A recovered re-anchor intent deliberately has no active card.
+            # Inform the user without creating a new draft/card contract.
+            self.telegram.send_message(chat_id, text)
+            return
+        markup = self._draft_keyboard(draft, [("🔒 Мой прогноз", "menu:my"), ("✖️ Закрыть", "cancel:yes")])
+        try:
+            self._delivery_telegram.edit_message(chat_id, draft.active_message_id, text, markup)
+        except TelegramHttpError as error:
+            if error.kind != "message_not_modified":
+                raise
+        except UnknownDeliveryError:
+            # The deadline state is already durable; no send fallback may
+            # repeat a possibly applied Telegram side effect.
+            logging.getLogger(__name__).warning("telegram_deadline_edit_unknown no_fallback=true")
+            raise
 
     def _prediction_from_draft(self, telegram_id: str) -> Prediction | None:
         draft = self._draft(telegram_id)
@@ -1876,6 +2582,35 @@ def _keyboard(buttons: list[tuple[str, str]], back: bool = False, cancel: bool =
     return {"inline_keyboard": rows}
 
 
+def _goal_keyboard(prefix: str, match_id: str) -> dict:
+    tokens = (("0", "0"), ("1", "1"), ("2", "2"), ("3", "3"), ("4", "4"), ("5+", "5p"))
+    rows = []
+    for offset in (0, 3):
+        rows.append([
+            {"text": label, "callback_data": f"{prefix}:{match_id}:{token}"}
+            for label, token in tokens[offset:offset + 3]
+        ])
+    rows.append([
+        {"text": "↩️ Возврат матча", "callback_data": f"admin:return:{match_id}"},
+        {"text": "← К матчам", "callback_data": "admin:results"},
+    ])
+    return {"inline_keyboard": rows}
+
+
+def _is_inplace_admin_action(data: str) -> bool:
+    return data in {"admin:menu", "admin:results", "admin:publish", "admin:publish-interim"} or data.startswith((
+        "admin:admins",
+        "admin:result:",
+        "admin:home-goals:",
+        "admin:away-goals:",
+        "admin:score-outcome:",
+        "admin:toggle:",
+        "admin:return:",
+        "admin:return-market:",
+        "admin:save-result:",
+    ))
+
+
 def _is_draft_action(data: str) -> bool:
     return data in {"back", "cancel", "express:add", "express:done", "confirm", "resume"} or data.startswith(("structure:", "match:", "market:", "stake:"))
 
@@ -1900,3 +2635,73 @@ def _chunks(lines: list[str], limit: int) -> list[list[str]]:
     if current:
         chunks.append(current)
     return chunks
+
+
+def _top_stats_caption(round_id: str, rows: list[dict], limit: int = 1000) -> str:
+    """Keep the publication caption below Telegram's 1024-character limit."""
+    header = f"📊 Топ-10 событий тура {round_id}"
+    footer = "Полная статистика — на инфографике."
+    if not rows:
+        return f"{header}\nНет подтверждённых прогнозов.\n{footer}"
+    lines = [header]
+    top = rows[:10]
+    for index, item in enumerate(top, 1):
+        label = str(item["label"])
+        if len(label) > 160:
+            label = label[:159].rstrip() + "…"
+        row = f"{index}. {label} — {item['count']}"
+        remaining = len(top) - index
+        suffix = ([f"…ещё событий в топ-10: {remaining}"] if remaining else []) + [footer]
+        if len("\n".join(lines + [row] + suffix)) > limit:
+            if remaining + 1:
+                lines.append(f"…ещё событий в топ-10: {remaining + 1}")
+            break
+        lines.append(row)
+    lines.append(footer)
+    return "\n".join(lines)
+
+
+def _interim_caption(
+    round_id: str,
+    completed: int,
+    total: int,
+    leaderboard,
+    names: dict[str, str],
+    limit: int = 1000,
+) -> str:
+    """Summarize an interim CSV while staying below Telegram's caption cap."""
+    lines = [
+        f"📊 Промежуточные результаты · {_caption_text(round_id, 80)}",
+        f"Матчей: {completed}/{total}. Рейтинг предварительный: экспрессы — после расчёта всех событий.",
+        "",
+    ]
+    footer = [
+        "",
+        "В скобках — итог, если зайдут все оставшиеся ставки.",
+    ]
+    for index, item in enumerate(leaderboard):
+        name = _caption_text(names.get(item.participant_id, "Участник"), 80)
+        row = f"{item.rank}. <b>{name}</b> — {_caption_number(item.realized_payout)} ({_caption_number(item.maximum_payout)})"
+        remaining = len(leaderboard) - index - 1
+        suffix = ([f"…ещё участников: {remaining}"] if remaining else []) + footer
+        if len("\n".join(lines + [row] + suffix)) > limit:
+            lines.append(f"…ещё участников: {remaining + 1}")
+            break
+        lines.append(row)
+    result = "\n".join(lines + footer)
+    if len(result) > limit:
+        # All dynamic text is bounded before escaping, so reaching this branch
+        # would be a programming error—not a reason to slice a HTML tag/entity.
+        raise ValueError("interim caption exceeds Telegram limit")
+    return result
+
+
+def _caption_number(value: int) -> str:
+    return f"{int(value):,}".replace(",", ".")
+
+
+def _caption_text(value: str, limit: int) -> str:
+    """Truncate raw text first, then escape once for Telegram HTML captions."""
+    value = value.replace("\r", " ").replace("\n", " ")
+    normalized = value if len(value) <= limit else value[:limit - 1].rstrip() + "…"
+    return html.escape(normalized, quote=True)

@@ -6,20 +6,32 @@
 |---|---|
 | Package | `tak-ili-inache-bot` |
 | Version | `0.1.0` |
-| Release status | `GIT BASELINE PUBLISHED / VDS ACTIVE / PARTICIPANT PILOT GO` |
-| Open gate | none for the participant pilot; Grafana and product notifications remain non-blocking P1 |
+| Release status | `ADMIN GRANTS / IN-MEMORY PNG P1 ACTIVE / PRODUCTION ACTIVATION GO` |
+| Open gate | owner grants Vitaly through `/admin` and performs bounded reporting smoke |
 | Application MVP baseline commit | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` |
 | S3/infra publication commit | `4a3540f98f6c310c7a842caaf9679218802b15a0` |
-| Release ID | `0.1.0-cjm-v1-2-close-integrity-20260825-local` |
-| Local verification at | `2026-08-25, CJM v1.2 + infra-v6.3.7, 145-test local pass` |
+| Active application feature commit | `9f8c0be` on `feature/group-admin-ux-p1` |
+| Release ID | `0.1.0-admin-grants-memory-png-p1-20260828-local` |
+| Local verification at | `2026-08-28, admin grants/CAS/in-memory PNG, 197-test local package GO` |
 | Python | `3.12.7` local; `3.13.5` VDS |
-| Active VDS runtime digest | `sha256:c68e07363c469eefa32f6f58d2ee3bfd8e00ecbad1d155294bd05bdf0bee5fa4` |
-| Git main runtime digest ×2 | `sha256:8fe429f2c222179c0e5e2a65715a0e2ed50b0e6b6f1ec05c3dd977718434b203` |
+| Candidate runtime digest ×2 | `sha256:f8e059cb922bb052ef9f03a4d366ac6537777d9f12f7d177ede9efd441cdc7a1` |
+| Active VDS release | `0.1.0-admin-grants-memory-png-p1-20260828-local` |
 
-The Git/VDS digest difference is limited to provider-neutral comments in three
-tracked deploy configuration examples. Executable Python and shell logic is
-unchanged. The Git identity is intentionally not claimed as deployed; the VDS
-identity above remains the pilot baseline until a future transactional release.
+The audited local candidate adds durable fail-closed admin grants (UI, CAS,
+state-machine and migration) and PNG publication as in-memory bytes sent only
+through Telegram multipart. It never writes PNGs to disk or an S3 registry;
+existing CSV, delivery, scoring and reporting semantics are preserved. The
+independent audit found no P0/P1; focused `26/26` and full `197/197` passed.
+Immutable staging and activation succeeded. The deployed worker has PID `69581`,
+`NRestarts=0`, strict health green and memory about `19.3 MiB`. The pre-activation
+encrypted snapshot completed at `2026-08-28 02:14:39 MSK`; post-activation backup
+and freshness completed at `02:16:43–02:16:47 MSK`. Active round data was
+preserved. The remaining owner action is to grant Vitaly via the `/admin`
+administrator-management flow; no Telegram ID is recorded here.
+
+The earlier staged `0.1.0-reporting-heatmaps-excel-p1-20260827-local` is
+immutable and stale and is **not** an activation target. Active round data is
+outside this package step.
 
 ## Historical VDS deployment gate — predates current local candidate
 
@@ -43,7 +55,142 @@ release surface: `pyproject.toml`, `Dockerfile`, `src/tak_ili_inache/` и `deplo
 Planning-документы, audits, tests, runtime data, venv и build products не могут
 изменить этот digest. Он воспроизводимо рассчитан дважды с идентичным результатом.
 
+## Admin grants and in-memory PNG P1 — LOCAL+REMOTE PASS / ACTIVE
+
+| Field | Value |
+|---|---|
+| Release ID | `0.1.0-admin-grants-memory-png-p1-20260828-local` |
+| Runtime digest ×2 | `sha256:f8e059cb922bb052ef9f03a4d366ac6537777d9f12f7d177ede9efd441cdc7a1` |
+| Scope | durable admin-grants UI/CAS/state-machine/migration fail-closed; publication PNG is Telegram multipart in-memory bytes only |
+| Full suite | `Ran 197 tests` / `OK`; focused audit `26/26`, no P0/P1 findings |
+| Local verification | full and clean-env suites, compile, shell syntax, diff check, sensitive/forbidden scan, digest ×2 and package self-check PASS; `systemd-analyze` unavailable locally |
+| External status | immutable staging and Python 3.13.5 `197/197`, exact digest, transaction and strict health PASS; encrypted S3 backup before activation plus post-activation backup/freshness PASS; owner grant/reporting smoke remains open |
+
+Disk hygiene evidence from the independent audit: release/data pruning reduced
+the local disk set from `34` to `3`, freeing about `729 MiB`; production disk
+usage is `43%`. CJM review found no new P0. Follow-ups are P1: admin-stage copy,
+interim revision status, and N–M wording in the outcome heatmap; P2 is gated by
+feedback.
+
+## Reporting heatmaps, Excel and privacy P1 r2 — ACTIVE PRODUCTION BASELINE
+
+`0.1.0-reporting-heatmaps-excel-p1-r2-20260827-local` remains the active VDS
+release with digest `sha256:e785f6f88f6ae53aa5dc586d85af312e3d9c7ff88cec454792e5405ba27ad478`.
+Its recorded remote verification and activation evidence is historical r2
+evidence only and does not verify the new local candidate.
+
+## Historical production baseline — reporting/Excel/privacy r1
+
+`0.1.0-reporting-heatmaps-excel-p1-r1-20260827-local` was the preceding VDS `current`,
+with digest `sha256:14f3b901de88ad84837046972e389c4624db6c8353336519494a14899e412efa`.
+Its prior immutable staging, remote Python 3.13.5 `183/183`, digest verification,
+transaction, strict health and encrypted S3 backup evidence remain historical r1
+facts and do not verify r2.
+
 ## Verification results
+
+## Prior active VDS baseline — CSV publication and actionable interim P1
+
+| Field | Value |
+|---|---|
+| Release ID | `0.1.0-csv-interim-p1-r1-20260827-local` |
+| Runtime digest ×2 | `sha256:6b070bfa3667ba4a49629fca64b0e43108dca38eb6f5e53edb5fc338929563b1` |
+| Scope | public coupons CSV instead of TXT; one interim CSV document with event/bet statuses, realized payout and remaining ceiling; compact in-place admin card |
+| Full suite | `Ran 174 tests` / `OK` |
+| Static/sensitive verification | compile, shell syntax, diff check and sensitive scan PASS |
+| External status | immutable r1 install PASS; `Ran 174 tests` / `OK` on Python 3.13.5; digest match; activation transaction PASS; strict health green after first long-poll; control S3 backup PASS |
+
+Public group CSV files exclude Telegram, participant and match IDs, neutralize
+spreadsheet formula prefixes and remove embedded line breaks. Intermediate rank
+is based on realized gross points; the file separately shows the maximum payout
+of pending bets and the maximum final total. A full return is labeled as a
+return. Successful admin callbacks edit the existing compact card and do not
+append success logs. Legacy and current pending publication operations remain
+fail-closed until reconciliation.
+The first immutable install ID failed its remote suite before activation because
+two new publication tests used a relative output directory under the root-owned
+release. Product runtime already uses the writable data directory. The tests now
+use isolated temporary directories; the failed ID was never activated.
+The active round remained `PILOT-20260826`; no Telegram publication was
+triggered during deployment.
+
+## Compact publication P1 — LOCAL+REMOTE PASS / ACTIVE
+
+| Field | Value |
+|---|---|
+| Release ID | `0.1.0-compact-publication-p1-20260827-local` |
+| Runtime digest ×2 | `sha256:e51cdc2efbc050237cd960b0aa8491c9c08e9993d9317ca7b0b2f1595098c50b` |
+| Scope | one public TXT with all coupons plus one top-10 PNG; one-message preliminary leaderboard after partial results; deterministic revision and Telegram-length guard |
+| Full suite | `Ran 171 tests` / `OK` |
+| Static/sensitive verification | compile, shell syntax and sensitive scan PASS |
+| External status | immutable install PASS; `Ran 171 tests` / `OK` on Python 3.13.5; digest match; activation transaction PASS; strict health green; control S3 backup PASS |
+
+Partial scoring leaves unresolved singles and still-live expresses pending. A bet
+is settled early only after a completed losing leg; returns use coefficient
+`1.00`. Equal realized payouts share a place. Intermediate publication never
+marks the round scored and is revision-idempotent across worker restarts.
+Compact `/publish` sends two group materials instead of one message per player,
+and refuses to bypass an unresolved legacy publication outbox step.
+The active round remained `PILOT-20260826`; no Telegram publication was triggered
+during deployment.
+
+## Admin score entry P1 — LOCAL+REMOTE PASS / ACTIVE
+
+| Field | Value |
+|---|---|
+| Release ID | `0.1.0-score-entry-p1-20260827-local` |
+| Runtime digest ×2 | `sha256:4bfa82a70c818f94ad67589087b1c5f54290c273f352b60db3db8c7eca03a5bf` |
+| Scope | score buttons `0…5+` for both teams; automatic canonical markets; full-match return; one editable admin card without intermediate Telegram messages |
+| Full suite | `Ran 164 tests` / `OK` |
+| External status | immutable install PASS; `Ran 164 tests` / `OK` on Python 3.13.5; digest match; activation transaction PASS; strict health green after first long-poll; control S3 backup PASS |
+
+The result is persisted immediately after the second score choice. `5+ — 5+`
+asks only for P1/X/P2 because the exact outcome is otherwise ambiguous; a 2.5
+total is still derived. Legacy manual-market callbacks reopen the new form and
+cannot persist an incompatible result.
+
+## Pilot readability P1 — LOCAL PASS / REMOTE PASS / ACTIVE
+
+| Field | Value |
+|---|---|
+| Release ID | `0.1.0-pilot-readability-p1-r1-20260827-local` |
+| Runtime digest ×2 | `sha256:900808db5e3677202bd2528c374bdcf2a549d9afdef025a4006007b58b17b461` |
+| Scope | human-readable published coupons; one-column compact mobile fixture list; admin long-format predictions CSV; top-10 publication plus full PNG heatmap; includes the verified draft-recovery P0 delta |
+| Full suite | `Ran 158 tests` / `OK` |
+| Static/sensitive verification | compile, shell syntax, diff check and sensitive scan PASS |
+| External status | immutable install PASS; `Ran 158 tests` / `OK` on Python 3.13.5; digest match; activation transaction PASS; strict health green; control S3 backup PASS |
+
+The candidate preserves transport, scoring rules, durable repository semantics
+and the deployment wrapper. Public coupons and the text top-10 never expose
+technical match IDs. The admin CSV intentionally excludes raw Telegram and
+participant IDs; it includes player display name, bet/event structure, full
+teams, market, odds, stake and potential payout. The PNG is a local derived
+artifact and remains excluded from S3. The first immutable install ID (without
+`r1`) failed its remote suite before activation because one test used a relative
+output directory under the root-owned release. The product path already used
+the writable data output directory. The test was moved to an isolated temp
+directory; the failed release was never activated. Only r1 became `current`.
+
+## Group/admin UX P1 — LOCAL PASS / REMOTE PASS / ACTIVE
+
+| Field | Value |
+|---|---|
+| Release ID | `0.1.0-group-admin-ux-p1-r2-20260825-local` |
+| Runtime digest ×2 | `sha256:eb73b60883f676656e474c9b25399f6b0545c77761eee58b12a2c5821e5bbc92` |
+| Scope | command `@username` normalization; silent ordinary group updates; safe private redirect; stage-aware status/publish/results/scoring buttons |
+| Domain/data delta | none; prediction rules, persistence, scoring, transport and active round are unchanged |
+| Full suite | `Ran 147 tests` / `OK` |
+| Static/sensitive verification | compile, shell syntax, diff check and sensitive scan PASS |
+| External status | immutable remote install and v5 activation transaction PASS; strict data/liveness/delivery health green; control S3 backup PASS |
+
+Acceptance `AC-59…AC-62` covers public `/help@bot_username` and
+`/rules@bot_username`, group silence for ordinary text/media, blocking of
+sensitive group actions, and the admin dashboard before/after deadline. The
+activation preserved active `PILOT-20260826`, one worker and green strict
+delivery health. `NRestarts=0` after activation. The first immutable install ID
+failed before activation because a staging directory mode `0700` propagated to
+the release root; the corrected `r2` incoming root was explicitly fixed to
+`0755`, passed all remote tests and was the only candidate activated.
 
 ## Infra-v6.3.7 S3 acceptance — LOCAL PASS / REMOTE PASS / BACKUP ACTIVE
 
@@ -69,7 +216,7 @@ operational status. S3 credentials were transferred directly to root-owned
 
 | Проверка | Результат | Evidence |
 |---|---:|---|
-| Unit/integration suite | PASS | `Ran 145 tests` / `OK`; includes coherent backup locking, isolated restore traversal and enabled-timer status |
+| Unit/integration suite | PASS | `Ran 147 tests` / `OK` locally and remotely; includes group/admin UX, coherent backup locking, isolated restore traversal and enabled-timer status |
 | Clean Python 3.12 venv install | PASS | fresh isolated PEP 517 venv: downloaded build dependency `setuptools>=68`, `pip install .` built/installed package, then `import tak_ili_inache` resolved from venv site-packages |
 | Python 3.13 | NOT AVAILABLE LOCALLY | `python3.13` отсутствует; не заявляется как проверенный этим локальным циклом |
 | Python compile | PASS | `src`, `tests`, `scripts`, exit 0 |
@@ -80,7 +227,7 @@ operational status. S3 credentials were transferred directly to root-owned
 | Liveness health / observability | PASS | `delivery_ok` requires healthy liveness and an outbound delivery at/after the last reply error; cumulative diagnostic count is retained, legacy count-only snapshots fail closed, and CLI/wrapper still exit non-zero for `ok:false` |
 | PNG reporting | PASS | три PNG имеют сигнатуру, ненулевые размеры и открываются Pillow; exact series сверены с `scoring.csv`/`leaderboard.csv`; Telegram flow использует `sendPhoto` с русскими captions, типы ставок подписаны «Ординары»/«Экспрессы» |
 | Tokenless transport gate | PASS (local fault model) | 200 logical IPv6 calls recover 7–10% first-attempt timeouts; repeated outage fails closed/non-zero; logical p95/p99 contract is documented |
-| Smoke acceptance docs | PASS | `LOCAL_SMOKE.md`, `RUNBOOK.md` and this manifest name the factual 145-test local gate |
+| Smoke acceptance docs | PASS | `LOCAL_SMOKE.md`, `PILOT_GUIDE.md`, `RUNBOOK.md` and this manifest cover the factual 147-test group/admin gate |
 | Deployment helper | PASS | `getUpdates` читает только sender/chat IDs до старта worker; token берётся только из env и не попадает в output/errors |
 | Restricted wrapper compatibility | PASS | v5 keeps v4 current-derived canonical root-owned path/digest/tamper validation and disabled generic `activate`; it adds only `activate-delivery-recovery` for the exact legacy-red baseline, candidate liveness marker, 120 s reply-delivery gate and honest red rollback |
 | Shell syntax | PASS | `bash -n` for admin, wrapper-upgrade, backup and prune scripts, exit 0 |
@@ -89,20 +236,22 @@ operational status. S3 credentials were transferred directly to root-owned
 | Historical tokenless transport gate | PASS (older candidate only) | sequential canonical run: 200/200, IPv6 only, p95 794 ms, p99 805 ms, exit 0; 25 recovered pre-send failures, zero final failures |
 | Historical active sequential release | PASS (older candidate only) | v4 transaction activated candidate; one worker, strict health and IPv6 long-polls passed; not evidence for this local candidate |
 | Active VDS release staging / remote verification | PASS | immutable application release and active VDS digest verified |
-| Active VDS release activation | PASS | `current` is `0.1.0-cjm-v1-2-close-integrity-20260825-local`; worker and health green |
+| Active VDS release activation | PASS | `current` is `0.1.0-group-admin-ux-p1-r2-20260825-local`; digest `eb73…bc92`; worker and strict health green |
 | Participant pilot | PASS / GO | `SMOKE-20260907` archived; `PILOT-20260826` active; strict data/liveness/delivery health green; one worker, `NRestarts=0`; post-activation S3 backup and freshness checks `success/0` |
 
 Tests emitted one non-blocking Python 3.14 `tarfile.extractall` deprecation warning. The verified runtime is Python 3.12.7 and archive paths are validated before extraction.
 
-## CJM v1.2 local candidate — 2026-08-25
+## CJM v1.2 predecessor — 2026-08-25
 
-`0.1.0-cjm-v1-2-close-integrity-20260825-local` is the **active VDS release**. Its runtime-only
+`0.1.0-cjm-v1-2-close-integrity-20260825-local` is the verified predecessor of
+the active group/admin UX release. Its runtime-only
 digest was calculated twice as
 `sha256:c68e07363c469eefa32f6f58d2ee3bfd8e00ecbad1d155294bd05bdf0bee5fa4`.
 The consolidated suite is `Ran 145 tests` / `OK`. Compile, shell syntax,
 sensitive scan, immutable remote staging, transactional activation and strict
-health passed. The real round `PILOT-20260826` is active and the participant
-pilot is GO. Grafana and product reminders remain non-blocking P1.
+health passed before it was superseded. The real round `PILOT-20260826` remains
+active and the participant pilot is GO. Grafana and product reminders remain
+non-blocking P1.
 
 The delta is bounded to participant CJM: one correction draft cloned from the
 confirmed coupon; internal stable selection/bet identities; compatible

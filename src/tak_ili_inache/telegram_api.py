@@ -25,8 +25,9 @@ class TelegramClient(Protocol):
     def clear_keyboard(self, chat_id: int, message_id: int) -> None: ...
     def get_updates(self, offset: int | None, timeout: int) -> list[dict[str, Any]]: ...
     def download_document(self, document: dict[str, Any]) -> bytes: ...
-    def send_document(self, chat_id: int, path: str, caption: str = "") -> None: ...
+    def send_document(self, chat_id: int, path: str, caption: str = "", parse_mode: str | None = None) -> None: ...
     def send_photo(self, chat_id: int, path: str, caption: str = "") -> None: ...
+    def send_photo_bytes(self, chat_id: int, filename: str, content: bytes, caption: str = "") -> None: ...
 
 
 class TelegramHttpError(RuntimeError):
@@ -92,11 +93,15 @@ class TelegramApi:
         file_path = self._call("getFile", {"file_id": document["file_id"]})["result"]["file_path"]
         return self._bytes_request(f"/file/bot{self._token}/{file_path}", 30, "downloadFile")
 
-    def send_document(self, chat_id: int, path: str, caption: str = "") -> None:
-        self._deliver(lambda: self._upload("sendDocument", "document", chat_id, path, caption))
+    def send_document(self, chat_id: int, path: str, caption: str = "", parse_mode: str | None = None) -> None:
+        self._deliver(lambda: self._upload("sendDocument", "document", chat_id, path, caption, parse_mode=parse_mode))
 
     def send_photo(self, chat_id: int, path: str, caption: str = "") -> None:
         self._deliver(lambda: self._upload("sendPhoto", "photo", chat_id, path, caption))
+
+    def send_photo_bytes(self, chat_id: int, filename: str, content: bytes, caption: str = "") -> None:
+        """Upload a rendered image without creating a filesystem artifact."""
+        self._deliver(lambda: self._upload_bytes("sendPhoto", "photo", chat_id, filename, content, caption))
 
     def _deliver(self, operation: Callable[[], Any]) -> Any:
         attempt = 0
@@ -119,10 +124,24 @@ class TelegramApi:
             raise TelegramHttpError(200, _telegram_error_kind(data))
         return data
 
-    def _upload(self, method: str, field: str, chat_id: int, path: str, caption: str) -> None:
+    def _upload(
+        self, method: str, field: str, chat_id: int, path: str, caption: str, *, parse_mode: str | None = None
+    ) -> None:
+        source = Path(path)
+        self._upload_bytes(method, field, chat_id, source.name, source.read_bytes(), caption, parse_mode=parse_mode)
+
+    def _upload_bytes(
+        self,
+        method: str,
+        field: str,
+        chat_id: int,
+        filename: str,
+        content: bytes,
+        caption: str,
+        *,
+        parse_mode: str | None = None,
+    ) -> None:
         boundary = uuid.uuid4().hex
-        filename = Path(path).name
-        content = Path(path).read_bytes()
         parts = [
             f"--{boundary}\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n{chat_id}\r\n".encode(),
             f"--{boundary}\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\n{caption}\r\n".encode(),
@@ -130,6 +149,8 @@ class TelegramApi:
             content,
             f"\r\n--{boundary}--\r\n".encode(),
         ]
+        if parse_mode is not None:
+            parts.insert(2, f"--{boundary}\r\nContent-Disposition: form-data; name=\"parse_mode\"\r\n\r\n{parse_mode}\r\n".encode())
         data = self._json_request(f"/bot{self._token}/{method}", b"".join(parts), {"Content-Type": f"multipart/form-data; boundary={boundary}"}, 30, method)
         if not data.get("ok"):
             raise TelegramHttpError(200, _telegram_error_kind(data))

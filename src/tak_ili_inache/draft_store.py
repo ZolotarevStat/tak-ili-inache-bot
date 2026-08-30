@@ -70,9 +70,10 @@ class DraftStore:
         legacy = {"version", "draft_id", "participant_id", "chat_id", "round_id", "state", "revision", "active_message_id", "structure", "bets", "current_events", "selected_match_id", "phase", "expresses", "express_index", "event_page", "match_page", "replacement", "return_phase", "pending_reset"}
         current = legacy | {"stake_edit", "stake_edit_index"}
         v12 = current | {"replacement_kind", "selection_slots"}
-        if (set(snapshot) != legacy and set(snapshot) != current and set(snapshot) != v12) or snapshot["state"] != "active":
+        v13 = v12 | {"reanchor_pending", "reanchor_predecessor_id"}
+        if (set(snapshot) != legacy and set(snapshot) != current and set(snapshot) != v12 and set(snapshot) != v13) or snapshot["state"] != "active":
             raise ValueError("Invalid draft snapshot.")
-        if snapshot["version"] not in {1, 2, 3}:
+        if snapshot["version"] not in {1, 2, 3, 4}:
             raise ValueError("Unsupported draft snapshot.")
         if not isinstance(snapshot["draft_id"], str) or len(snapshot["draft_id"]) > 12:
             raise ValueError("Invalid draft identifier.")
@@ -80,3 +81,13 @@ class DraftStore:
             raise ValueError("Invalid draft binding.")
         if not isinstance(snapshot["revision"], int) or snapshot["revision"] < 1:
             raise ValueError("Invalid draft revision.")
+        if snapshot["version"] == 4:
+            if set(snapshot) != v13 or not isinstance(snapshot["reanchor_pending"], bool):
+                raise ValueError("Invalid re-anchor snapshot.")
+            predecessor = snapshot["reanchor_predecessor_id"]
+            if predecessor is not None and not isinstance(predecessor, int):
+                raise ValueError("Invalid re-anchor predecessor.")
+            if snapshot["reanchor_pending"] and snapshot["active_message_id"] is not None:
+                raise ValueError("Invalid re-anchor card state.")
+            if not snapshot["reanchor_pending"] and predecessor is not None:
+                raise ValueError("Invalid re-anchor card state.")

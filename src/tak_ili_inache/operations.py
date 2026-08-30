@@ -89,6 +89,10 @@ def health(data_dir: str | Path, require_liveness: bool = False, require_deliver
                 return result(False)
         if not _valid_result_rows(repository.raw_result_rows(), {item.round_id: item for item in rounds if item is not None}):
             return result(False)
+        # Runtime permissions are private, but their integrity is part of a
+        # restorable data state.  An orphaned or malformed active grant must
+        # never silently become an administrator after restore.
+        repository.active_admin_grants()
         return result(True)
     except Exception:
         return {"ok": False, "data_ok": False, "data_dir": str(directory), "active_round": None, "liveness": None}
