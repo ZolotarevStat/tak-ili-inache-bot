@@ -19,9 +19,10 @@ Candidate `0.1.0-player-cards-preview-p1-r2-20260909-local`, runtime digest ×2
 Карточки `1080×1080` показывают ставки, плечи экспрессов, текущие статусы и
 выплаты, ближайший прогноз и скор близости `[0, 1]`. Они сортируются по
 близости, рендерятся только в памяти и отправляются батчами до десяти PNG;
-турнирная группа не используется. Remote Python 3.13.5, exact digest,
-tokenless canary, encrypted pre/post backup, activation transaction и strict
-health для r2 pending. Active production prior — preview p1 без r2.
+турнирная группа не используется. Remote Python 3.13.5 `210/210`, exact digest,
+tokenless IPv6 canary `200/200`, encrypted pre/post backup, activation
+transaction и strict health прошли. R2 является active production release;
+ручной visual retry остаётся за владельцем.
 
 ### Private player-card preview
 

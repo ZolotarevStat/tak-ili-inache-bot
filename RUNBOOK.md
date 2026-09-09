@@ -144,16 +144,17 @@ ssh -i ~/.ssh/<VDS_ADMIN_KEY> admin@<VDS_HOST> '
 
 ## 2. Local verification and release identity
 
-Current candidate:
+Current production release:
 `0.1.0-player-cards-preview-p1-r2-20260909-local`.
-Он имеет local suite contract `Ran 210 tests` / `OK` и runtime digest ×2
+Он имеет local+remote suite contract `Ran 210 tests` / `OK` и runtime digest ×2
 `sha256:7d827ad7439777cc0735f5603385249dbb567c5efe8ded104e63ebbbd2866802`.
 Candidate исправляет падение приватного admin-preview на валидном купоне из
 девяти событий (`3+2`, два экспресса по три плеча). PNG рендерятся в памяти,
 отправляются media groups до десяти изображений и никогда не публикуются в
-турнирную группу. Active production prior:
-`0.1.0-player-cards-preview-p1-20260909-local`; remote gates для r2 ещё не
-выполнены. Не изменяйте `current` in-place. Staged
+турнирную группу. Immutable install, tokenless canary `200/200`, encrypted
+pre/post backup, activation transaction и strict health прошли. Production
+active/enabled с одним worker и `NRestarts=0`; owner visual retry остаётся
+открытым. Не изменяйте `current` in-place. Staged
 `0.1.0-reporting-heatmaps-excel-p1-20260827-local` immutable/stale и не является
 activation target.
 

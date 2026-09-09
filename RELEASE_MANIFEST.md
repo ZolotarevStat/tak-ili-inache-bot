@@ -6,8 +6,8 @@
 |---|---|
 | Package | `tak-ili-inache-bot` |
 | Version | `0.1.0` |
-| Release status | `PLAYER CARDS PREVIEW P1 R2 — LOCAL PASS / CANDIDATE` |
-| Open gate | remote immutable install, activation, strict health and owner retry |
+| Release status | `PLAYER CARDS PREVIEW P1 R2 — LOCAL+REMOTE PASS / ACTIVE` |
+| Open gate | owner visual retry of the private albums |
 | Application MVP baseline commit | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` |
 | S3/infra publication commit | `4a3540f98f6c310c7a842caaf9679218802b15a0` |
 | Active application feature commit | `8f075e4` on `feature/group-admin-ux-p1` |
@@ -15,7 +15,7 @@
 | Local verification at | `2026-09-09, nine-event player-card regression, 210-test local package GO` |
 | Python | `3.12.7` local; `3.13.5` VDS |
 | Runtime digest ×2 | `sha256:7d827ad7439777cc0735f5603385249dbb567c5efe8ded104e63ebbbd2866802` |
-| Active VDS release | `0.1.0-player-cards-preview-p1-20260909-local` |
+| Active VDS release | `0.1.0-player-cards-preview-p1-r2-20260909-local` |
 
 The prior production preview received the owner's callback but failed before
 any media call: its fixed geometry overflowed on the valid nine-event shape
@@ -23,10 +23,13 @@ any media call: its fixed geometry overflowed on the valid nine-event shape
 events clear of the nearest-neighbour footer, and moves coefficient plus payout
 into each bet header so the first event cannot overlap them. A controlled
 admin-facing error now replaces a silent handler failure if rendering fails.
-The new nine-event render regression, full local `Ran 210 tests` / `OK`,
-compile, visual inspection, diff check and deterministic digest ×2 passed.
-Production remains on the prior release until the immutable remote gates and
-transaction complete. PNG remains in-memory-only and private.
+The new nine-event render regression, full local and remote Python 3.13.5
+`Ran 210 tests` / `OK`, compile, visual inspection, diff check and deterministic
+digest ×2 passed. Tokenless IPv6 canary passed `200/200`, with zero logical
+failures, p95 `789 ms` and p99 `1 488 ms`. Encrypted pre/post backups,
+transactional activation and strict data/liveness/delivery health passed.
+Production is active/enabled with one worker, `NRestarts=0`, about 19.8 MiB
+memory and round `20260908` preserved. PNG remains in-memory-only and private.
 
 The first immutable fix ID (`...-r1-20260909-local`) was not activated: its
 remote suite failed because the deliberately narrow upload package omitted the
