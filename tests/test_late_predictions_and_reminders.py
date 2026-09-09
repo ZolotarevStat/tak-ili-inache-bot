@@ -37,7 +37,7 @@ class LatePredictionsAndRemindersTests(unittest.TestCase):
 
     def test_reminders_are_sent_once_only_to_missing_people(self) -> None:
         other = self.repo.register_participant("43", "Не сдал")
-        now = [self.round_.deadline_msk.replace(hour=0, minute=0, second=1, microsecond=0)]
+        now = [self.round_.deadline_msk.replace(hour=12, minute=0, second=1, microsecond=0)]
         telegram = FakeTelegram(); bot = BotService(self.repo, telegram, lambda: now[0])
         bot.process_scheduled_notifications(); bot.process_scheduled_notifications()
         self.assertEqual([chat_id for chat_id, *_ in telegram.messages], [int(self.player.telegram_id), int(other.telegram_id)])

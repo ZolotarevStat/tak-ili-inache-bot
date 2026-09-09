@@ -152,8 +152,8 @@ class BotService:
         if not round_:
             return
         now = self.now()
-        midnight = datetime.combine(round_.deadline_msk.date(), time.min, tzinfo=round_.deadline_msk.tzinfo)
-        checkpoints = (("day-start", midnight), ("one-hour", round_.deadline_msk - timedelta(hours=1)))
+        noon = datetime.combine(round_.deadline_msk.date(), time(hour=12), tzinfo=round_.deadline_msk.tzinfo)
+        checkpoints = (("noon", noon), ("one-hour", round_.deadline_msk - timedelta(hours=1)))
         missing = {item.participant_id for item in self.repository.participants()} - {
             item.participant_id for item in self.repository.latest_predictions(round_.round_id)
         }

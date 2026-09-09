@@ -144,17 +144,17 @@ ssh -i ~/.ssh/<VDS_ADMIN_KEY> admin@<VDS_HOST> '
 
 ## 2. Local verification and release identity
 
-Current production release
-`0.1.0-admin-cjm-ops-p1-20260909-local` имеет suite contract
+Current production release остаётся
+`0.1.0-admin-cjm-ops-p1-20260909-local` до успешной r1-транзакции.
+Новый candidate `0.1.0-admin-cjm-ops-p1-r1-20260909-local` имеет suite contract
 `Ran 199 tests` / `OK` и runtime digest ×2
-`sha256:2f6353efadb9e880a10b0fd9358c5f3cd06915e50853083a5654c1bf5660c5a9`.
+`sha256:3a25fe906e43e8cb9c88325a9f8d1372f71ffd1fe63c424c473adc9f0d81d8d2`.
 Он добавляет ceiling ставки 2 000, durable missing-pick reminders, late CSV
 для админа без начавшихся матчей, staging следующей линии, читаемые сохранённые
 счета и безопасный промежуточный выбор альтернатив одного матча. Не изменяйте
-`current` in-place. Immutable install, remote Python 3.13.5 `199/199`, exact
-digest, transport canary, transaction, strict health и encrypted S3 backup
-до/после activation прошли. Эти gates остаются обязательными для следующего
-release. Staged
+`current` in-place. R1 меняет первый reminder с полуночи на `12:00 MSK`.
+Immutable install, remote suite/digest, transport canary, transaction, strict
+health и encrypted S3 backup остаются обязательными gates. Staged
 `0.1.0-reporting-heatmaps-excel-p1-20260827-local` immutable/stale и не является
 activation target.
 
@@ -176,7 +176,7 @@ Sensitive scan must return no matches:
 Set the release ID after the digest is recorded in the deployment evidence:
 
 ```bash
-export TII_RELEASE_ID="0.1.0-admin-cjm-ops-p1-20260909-local"
+export TII_RELEASE_ID="0.1.0-admin-cjm-ops-p1-r1-20260909-local"
 export TII_VDS_HOST=<VDS_HOST>
 ```
 
@@ -197,7 +197,7 @@ rsync -az --delete \
 On the VDS, install and validate before switching `current`:
 
 ```bash
-export TII_RELEASE_ID="0.1.0-admin-cjm-ops-p1-20260909-local"
+export TII_RELEASE_ID="0.1.0-admin-cjm-ops-p1-r1-20260909-local"
 sudo install -d -o root -g root -m 0755 "/opt/tak-ili-inache/releases/${TII_RELEASE_ID}"
 sudo rsync -a --delete \
   "/srv/tak-ili-inache/incoming/${TII_RELEASE_ID}/" \

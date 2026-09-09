@@ -6,36 +6,31 @@
 |---|---|
 | Package | `tak-ili-inache-bot` |
 | Version | `0.1.0` |
-| Release status | `ADMIN / CJM / LATE-CSV P1 ACTIVE / PRODUCTION ACTIVATION GO` |
-| Open gate | bounded owner smoke of late CSV, staged round, reminders and revised CJM |
+| Release status | `ADMIN / CJM / LATE-CSV P1 R1 — LOCAL PACKAGE GO; REMOTE ACTIVATION PENDING` |
+| Open gate | immutable remote install, exact digest, transaction, strict health and encrypted backup |
 | Application MVP baseline commit | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` |
 | S3/infra publication commit | `4a3540f98f6c310c7a842caaf9679218802b15a0` |
-| Active application feature commit | `460e404` on `feature/group-admin-ux-p1` |
-| Release ID | `0.1.0-admin-cjm-ops-p1-20260909-local` |
+| Active application feature commit | pending r1 commit on `feature/group-admin-ux-p1` |
+| Release ID | `0.1.0-admin-cjm-ops-p1-r1-20260909-local` |
 | Local verification at | `2026-09-09, admin operations/CJM/late CSV, 199-test local package GO` |
 | Python | `3.12.7` local; `3.13.5` VDS |
-| Candidate runtime digest ×2 | `sha256:2f6353efadb9e880a10b0fd9358c5f3cd06915e50853083a5654c1bf5660c5a9` |
+| Candidate runtime digest ×2 | `sha256:3a25fe906e43e8cb9c88325a9f8d1372f71ffd1fe63c424c473adc9f0d81d8d2` |
 | Active VDS release | `0.1.0-admin-cjm-ops-p1-20260909-local` |
 
 The audited local candidate lowers the maximum bet to `2 000`, adds durable
-00:00 and one-hour-before-deadline reminders for participants without a
+12:00 and one-hour-before-deadline reminders for participants without a
 prediction, admin import of late predictions from CSV while rejecting fixtures
 already started, staging of the next round, and result buttons that show stored
 scores. It also makes express coefficients explicit in the draft/review and
 allows temporary alternative selections for one match, but blocks continuation
 and confirmation until every match is used once. The legacy 4+1 / 3+2,
-five-bet contract remains in force. Full `Ran 199 tests` / `OK`, compile, shell
-syntax, diff check, sensitive scan and deterministic digest ×2 passed locally.
-Immutable install on Python 3.13.5 repeated `199/199`, systemd verification and
-exact digest; tokenless transport canary passed `200/200`, IPv6 only, with zero
-logical failures, p95 `784 ms` and p99 `793 ms`. Transactional activation
-completed at `2026-09-09 05:25:33 MSK`; strict data/liveness/delivery health is
-green, exactly one worker is active with `NRestarts=0` and memory about
-`20.4 MiB`. Active round `20260908` and runtime data were preserved. Encrypted
-backup plus freshness passed before and after activation; post evidence was
-recorded at `05:27:32 MSK`. No automatic release prune was run.
+five-bet contract remains in force. R1 clarifies the first reminder as noon
+(`12:00 MSK`), not midnight. Full `Ran 199 tests` / `OK`, compile, diff check
+and deterministic digest ×2 passed locally. Remote evidence for the prior
+release below does not transfer to r1; immutable install and activation remain
+pending, while the prior release stays the active VDS rollback target.
 
-## Admin operations, late CSV and interim CJM — LOCAL+REMOTE PASS / ACTIVE
+## Admin operations, late CSV and interim CJM r0 — LOCAL+REMOTE PASS / ACTIVE PRIOR
 
 | Field | Value |
 |---|---|

@@ -12,17 +12,16 @@ PYTHONPATH=src python3 -m tak_ili_inache.polling
 ```
 
 Локальный suite нового candidate завершился как `Ran 199 tests` и `OK`.
-Candidate `0.1.0-admin-cjm-ops-p1-20260909-local`, runtime digest ×2
-`sha256:2f6353efadb9e880a10b0fd9358c5f3cd06915e50853083a5654c1bf5660c5a9`,
-снижает максимум ставки до 2 000, добавляет reminders в 00:00 дня дедлайна и
+Candidate `0.1.0-admin-cjm-ops-p1-r1-20260909-local`, runtime digest ×2
+`sha256:3a25fe906e43e8cb9c88325a9f8d1372f71ffd1fe63c424c473adc9f0d81d8d2`,
+снижает максимум ставки до 2 000, добавляет reminders в 12:00 дня дедлайна и
 за час до него только несдавшим, late-CSV для администратора с запретом уже
 начавшихся матчей, staging следующего тура и подписи сохранённых счетов в
 админском вводе результатов. В CJM временно разрешены альтернативы одного
 матча, но продолжение и confirm блокируются, пока на матч не останется ровно
-один исход. Immutable remote install на Python 3.13.5 повторил `199/199` и exact
-digest; transport canary `200/200`, transactional activation, strict health и
-encrypted backup/freshness до и после activation прошли. Этот release активен;
-bounded owner product-smoke остаётся отдельной проверкой.
+один исход. R1 уточняет первый reminder как полдень (`12:00 MSK`), а не
+полночь. Remote install, transport canary, activation, strict health и backup
+для r1 пока pending; активным остаётся предыдущий release.
 
 ## Обязательный внешний command-first canary
 
