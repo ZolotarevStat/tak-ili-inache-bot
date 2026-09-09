@@ -70,7 +70,7 @@ class BotFlowTests(unittest.TestCase):
         self.round_ = import_fixtures(Path(__file__).resolve().parents[1] / "data" / "fixtures_sample.csv")
         self.repo.save_round(self.round_)
         self.now = self.round_.deadline_msk - timedelta(minutes=10)
-        self.bot = BotService(self.repo, self.tg, lambda: self.now)
+        self.bot = BotService(self.repo, self.tg, lambda: self.now, composer_version=1)
 
     def test_private_happy_path_registers_saves_and_replaces_prediction(self) -> None:
         self._message("/start")

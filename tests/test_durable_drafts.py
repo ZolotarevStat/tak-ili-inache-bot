@@ -46,7 +46,7 @@ class DurableDraftTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(); self.repo = CsvRepository(self.tmp.name)
         self.round_ = import_fixtures(Path(__file__).resolve().parents[1] / "data" / "fixtures_sample.csv"); self.repo.save_round(self.round_)
         self.now = [self.round_.deadline_msk - timedelta(minutes=10)]; self.tg, self.store = _Telegram(), DraftStore(self.tmp.name)
-        self.bot = BotService(self.repo, self.tg, lambda: self.now[0], draft_store=self.store); self.bot.handle_update(self._message("/start"))
+        self.bot = BotService(self.repo, self.tg, lambda: self.now[0], draft_store=self.store, composer_version=1); self.bot.handle_update(self._message("/start"))
     def tearDown(self): self.tmp.cleanup()
     def test_hundred_stale_replays_make_one_transition_and_keep_one_card(self):
         self.bot.handle_update(self._message("/predict")); draft = self.bot._draft("42"); action, card = self._button("Мексика — ЮАР"), draft.active_message_id
@@ -55,7 +55,7 @@ class DurableDraftTests(unittest.TestCase):
         self.assertEqual((draft.revision, len(self.tg.edits), draft.active_message_id), (revision, edits, card)); self.assertEqual(sum(bool(text) for _, text in self.tg.answers), 100)
     def test_restart_snapshot_is_minimal_and_resumes_one_card(self):
         self.bot.handle_update(self._message("/predict")); draft = self.bot._draft("42"); self.bot.handle_update(self._callback(self._button("Мексика — ЮАР"), draft.active_message_id, "match"))
-        restarted = BotService(self.repo, self.tg, lambda: self.now[0], draft_store=DraftStore(self.tmp.name)); restored = restarted._draft("42")
+        restarted = BotService(self.repo, self.tg, lambda: self.now[0], draft_store=DraftStore(self.tmp.name), composer_version=1); restored = restarted._draft("42")
         self.assertEqual((restored.draft_id, restored.active_message_id, restored.phase), (draft.draft_id, draft.active_message_id, "E2"))
         snapshot = json.loads((Path(self.tmp.name) / "drafts_runtime.json").read_text())["42"]
         self.assertEqual(snapshot["version"], 4); self.assertIn("expresses", snapshot); self.assertIn("stake_edit", snapshot); self.assertIn("selection_slots", snapshot); self.assertIn("reanchor_pending", snapshot); self.assertNotIn("token", json.dumps(snapshot).lower()); self.assertNotIn("payload", json.dumps(snapshot).lower())
@@ -89,7 +89,7 @@ class DurableDraftTests(unittest.TestCase):
         # replay is stale, while explicit restart deliberately re-anchors once.
         self.bot.handle_update(self._callback(action, card, "replay"))
         self.assertEqual((draft.revision, len(self.tg.messages), len(self.tg.edits)), (revision + 1, sends, edits + 1))
-        restarted = BotService(self.repo, self.tg, lambda: self.now[0], draft_store=DraftStore(self.tmp.name))
+        restarted = BotService(self.repo, self.tg, lambda: self.now[0], draft_store=DraftStore(self.tmp.name), composer_version=1)
         restarted.handle_update(self._message("/predict", 12))
         restored = restarted._draft("42")
         self.assertNotEqual(restored.active_message_id, card)
@@ -197,7 +197,7 @@ class DurableDraftTests(unittest.TestCase):
             (old_revision + 1, None, True, old_card),
         )
 
-        restarted = BotService(self.repo, self.tg, lambda: self.now[0], draft_store=DraftStore(self.tmp.name))
+        restarted = BotService(self.repo, self.tg, lambda: self.now[0], draft_store=DraftStore(self.tmp.name), composer_version=1)
         restored = restarted._draft("42")
         self.assertEqual((restored.revision, restored.active_message_id, restored.reanchor_pending), (old_revision + 1, None, True))
         self.assertEqual(len(self.tg.messages), sends_after_crash)
@@ -265,7 +265,7 @@ class DurableDraftTests(unittest.TestCase):
         self.assertEqual((len(self.tg.edits), len(self.tg.messages)), (edits + 1, messages))
         self.assertIn("Выберите матч · 2/2:", self.tg.edits[-1][2])
 
-        self.bot = BotService(self.repo, self.tg, lambda: self.now[0], draft_store=DraftStore(self.tmp.name))
+        self.bot = BotService(self.repo, self.tg, lambda: self.now[0], draft_store=DraftStore(self.tmp.name), composer_version=1)
         draft = self.bot._draft("42")
         self.assertEqual((draft.match_page, draft.active_message_id), (1, card))
 
@@ -284,7 +284,7 @@ class DurableDraftTests(unittest.TestCase):
         self.bot.handle_update(self._message("/predict")); draft = self.bot._draft("42"); action, card = self._button("Мексика — ЮАР"), draft.active_message_id; original_save = self.store.save
         self.store.save = lambda *_: (_ for _ in ()).throw(OSError("snapshot crash"))
         with self.assertRaises(OSError): self.bot.handle_update(self._callback(action, card, "crash"))
-        self.store.save = original_save; restarted = BotService(self.repo, self.tg, lambda: self.now[0], draft_store=DraftStore(self.tmp.name)); self.assertEqual(restarted._draft("42").revision, 1)
+        self.store.save = original_save; restarted = BotService(self.repo, self.tg, lambda: self.now[0], draft_store=DraftStore(self.tmp.name), composer_version=1); self.assertEqual(restarted._draft("42").revision, 1)
         self.now[0] = self.round_.deadline_msk; restarted.handle_update(self._callback(action, card, "deadline")); self.assertEqual(restarted._draft("42").phase, "L0"); self.assertIn("⏰ Дедлайн прошёл", self.tg.edits[-1][2])
 
     def test_v1_snapshot_migrates_to_v11_without_losing_the_active_draft(self):
@@ -293,7 +293,7 @@ class DurableDraftTests(unittest.TestCase):
         snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))["42"]
         snapshot["version"] = 1; snapshot.pop("stake_edit"); snapshot.pop("stake_edit_index"); snapshot.pop("reanchor_pending"); snapshot.pop("reanchor_predecessor_id")
         snapshot_path.write_text(json.dumps({"42": snapshot}, ensure_ascii=False), encoding="utf-8")
-        restarted = BotService(self.repo, self.tg, lambda: self.now[0], draft_store=DraftStore(self.tmp.name))
+        restarted = BotService(self.repo, self.tg, lambda: self.now[0], draft_store=DraftStore(self.tmp.name), composer_version=1)
         restored = restarted._draft("42")
         self.assertEqual((restored.phase, restored.stake_edit, restored.stake_edit_index), ("E1", None, 0))
 
@@ -307,7 +307,7 @@ class DurableDraftTests(unittest.TestCase):
         snapshot.pop("reanchor_pending")
         snapshot.pop("reanchor_predecessor_id")
         snapshot_path.write_text(json.dumps({"42": snapshot}, ensure_ascii=False), encoding="utf-8")
-        restarted = BotService(self.repo, self.tg, lambda: self.now[0], draft_store=DraftStore(self.tmp.name))
+        restarted = BotService(self.repo, self.tg, lambda: self.now[0], draft_store=DraftStore(self.tmp.name), composer_version=1)
         restored = restarted._draft("42")
         self.assertEqual((restored.replacement_kind, restored.selection_slots, restored.phase), ("new", {}, "E1"))
     def _button(self, label):

@@ -71,9 +71,10 @@ class DraftStore:
         current = legacy | {"stake_edit", "stake_edit_index"}
         v12 = current | {"replacement_kind", "selection_slots"}
         v13 = v12 | {"reanchor_pending", "reanchor_predecessor_id"}
-        if (set(snapshot) != legacy and set(snapshot) != current and set(snapshot) != v12 and set(snapshot) != v13) or snapshot["state"] != "active":
+        v14 = v13 | {"composer_version", "slot_index", "slot_bet_type"}
+        if (set(snapshot) != legacy and set(snapshot) != current and set(snapshot) != v12 and set(snapshot) != v13 and set(snapshot) != v14) or snapshot["state"] != "active":
             raise ValueError("Invalid draft snapshot.")
-        if snapshot["version"] not in {1, 2, 3, 4}:
+        if snapshot["version"] not in {1, 2, 3, 4, 5}:
             raise ValueError("Unsupported draft snapshot.")
         if not isinstance(snapshot["draft_id"], str) or len(snapshot["draft_id"]) > 12:
             raise ValueError("Invalid draft identifier.")
@@ -81,9 +82,13 @@ class DraftStore:
             raise ValueError("Invalid draft binding.")
         if not isinstance(snapshot["revision"], int) or snapshot["revision"] < 1:
             raise ValueError("Invalid draft revision.")
-        if snapshot["version"] == 4:
+        if snapshot["version"] in {4, 5}:
             if set(snapshot) != v13 or not isinstance(snapshot["reanchor_pending"], bool):
-                raise ValueError("Invalid re-anchor snapshot.")
+                if snapshot["version"] != 5 or set(snapshot) != v14 or not isinstance(snapshot["reanchor_pending"], bool):
+                    raise ValueError("Invalid re-anchor snapshot.")
+            if snapshot["version"] == 5:
+                if snapshot["composer_version"] not in {1, 2} or not isinstance(snapshot["slot_index"], int) or snapshot["slot_bet_type"] not in {None, "single", "express"}:
+                    raise ValueError("Invalid composer snapshot.")
             predecessor = snapshot["reanchor_predecessor_id"]
             if predecessor is not None and not isinstance(predecessor, int):
                 raise ValueError("Invalid re-anchor predecessor.")

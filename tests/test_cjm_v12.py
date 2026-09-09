@@ -22,7 +22,7 @@ class CjmV12Tests(unittest.TestCase):
         self.round_ = import_fixtures(Path(__file__).resolve().parents[1] / "data" / "fixtures_sample.csv")
         self.repo.save_round(self.round_)
         self.now = [self.round_.deadline_msk - timedelta(minutes=10)]
-        self.bot = BotService(self.repo, self.tg, lambda: self.now[0])
+        self.bot = BotService(self.repo, self.tg, lambda: self.now[0], composer_version=1)
         self._card_override = None
         self.message("/start")
 
@@ -138,11 +138,11 @@ class CjmV12Tests(unittest.TestCase):
     def test_v12_snapshot_restart_and_v2_backward_read(self):  # AC-50, AC-56
         with tempfile.TemporaryDirectory() as directory:
             repo = CsvRepository(directory); repo.save_round(self.round_)
-            tg = Telegram(); bot = BotService(repo, tg, lambda: self.now[0], draft_store=DraftStore(directory))
+            tg = Telegram(); bot = BotService(repo, tg, lambda: self.now[0], draft_store=DraftStore(directory), composer_version=1)
             bot.handle_update(self.message_update("/start")); self._drive_confirm(bot, tg, 6)
             bot.handle_update(self.message_update("/my")); self._card_override = tg.messages[-1]; self._click_bot(bot, tg, "✏️ Внести корректировки")
             draft = bot._draft("42"); self._click_bot(bot, tg, "⚽ Изменить события"); self._open_bot(bot, tg, "M01"); self._click_bot(bot, tg, "🗑 Убрать матч"); self._click_bot(bot, tg, "✅ Убрать матч")
-            restored = BotService(repo, tg, lambda: self.now[0], draft_store=DraftStore(directory))._draft("42")
+            restored = BotService(repo, tg, lambda: self.now[0], draft_store=DraftStore(directory), composer_version=1)._draft("42")
             self.assertEqual((restored.replacement_kind, restored.phase, len(restored.current_events)), ("correction", "E1", 5))
 
     def _confirmed_coupon(self, count: int) -> None:

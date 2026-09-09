@@ -62,7 +62,7 @@ class PilotPolishTests(unittest.TestCase):
         repo, tg = FakeRepository(), FakeTelegram()
         repo.save_round(self.round_)
         repo.register_participant("42", "Игрок")
-        bot = BotService(repo, tg, lambda: self.round_.deadline_msk - timedelta(minutes=10))
+        bot = BotService(repo, tg, lambda: self.round_.deadline_msk - timedelta(minutes=10), composer_version=1)
         bot._begin_prediction(1, "42")
         rows = tg.messages[-1][2]["inline_keyboard"]
         match_rows = [row for row in rows if row[0]["callback_data"].endswith(tuple(f"match:M{i:02d}" for i in range(1, 13)))]

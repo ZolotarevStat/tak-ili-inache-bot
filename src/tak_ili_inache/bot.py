@@ -92,6 +92,9 @@ class DraftBet:
     # Stable only inside a draft.  It is deliberately never rendered to a
     # participant, but lets a compatible partial edit retain its stake.
     bet_id: str = ""
+    # A v2 coupon has five stable positions.  Zero is retained for readable
+    # snapshots of the previous event-first composer.
+    slot_index: int = 0
 
 
 @dataclass
@@ -126,6 +129,12 @@ class Draft:
     pending_reset: dict | None = None
     stake_edit: list[int | None] | None = None
     stake_edit_index: int = 0
+    # Composer v2 builds a coupon directly in five positions instead of
+    # asking the participant to select events first and then redistribute
+    # them into expresses.
+    composer_version: int = 1
+    slot_index: int = 0
+    slot_bet_type: str | None = None
 
 
 @dataclass
@@ -135,7 +144,7 @@ class ResultScoreDraft:
 
 
 class BotService:
-    def __init__(self, repository: Repository, telegram: TelegramClient, now: Callable[[], datetime], admin_ids: set[str] | None = None, tournament_chat_id: int | None = None, output_dir: str | Path = "output", draft_store: DraftStore | None = None) -> None:
+    def __init__(self, repository: Repository, telegram: TelegramClient, now: Callable[[], datetime], admin_ids: set[str] | None = None, tournament_chat_id: int | None = None, output_dir: str | Path = "output", draft_store: DraftStore | None = None, composer_version: int = 2) -> None:
         self.repository, self._delivery_telegram, self.now = repository, telegram, now
         self.telegram = _BestEffortTelegram(telegram)
         self.drafts: dict[str, Draft] = {}
@@ -152,6 +161,7 @@ class BotService:
         self.result_drafts: dict[tuple[str, str], ResultScoreDraft] = {}
         self._pending_outbox_tokens: dict[tuple[str, str], str] = {}
         self.draft_store = draft_store
+        self.composer_version = composer_version
         self._restore_drafts()
 
     def handle_update(self, update: dict) -> None:
@@ -361,7 +371,34 @@ class BotService:
             self._admin_action_confirmed(chat_id, telegram_id, message.get("message_id"), data.rsplit(":", 1)[-1])
         elif data == "back":
             self._back(chat_id, telegram_id)
+        elif data == "slot:dashboard":
+            self._render_slot_dashboard(chat_id, telegram_id)
+        elif data.startswith("slot:open:"):
+            self._open_slot(chat_id, telegram_id, int(data.rsplit(":", 1)[-1]))
+        elif data.startswith("slot:type:"):
+            _, _, index, kind = data.split(":", 3)
+            self._choose_slot_type(chat_id, telegram_id, int(index), kind)
+        elif data.startswith("slot:match:"):
+            self._slot_match(chat_id, telegram_id, data.removeprefix("slot:match:"))
+        elif data.startswith("slot:page:"):
+            self._slot_page(chat_id, telegram_id, int(data.rsplit(":", 1)[-1]))
+        elif data == "slot:matches":
+            draft = self._draft(telegram_id)
+            if draft:
+                draft.phase = "S2"; self._touch(telegram_id); self._render_slot_matches(chat_id, telegram_id)
+        elif data.startswith("slot:market:"):
+            _, _, match_id, market = data.split(":", 3)
+            self._slot_market(chat_id, telegram_id, match_id, Market(market))
+        elif data == "slot:save":
+            self._save_slot(chat_id, telegram_id)
+        elif data == "slot:occupied":
+            self.telegram.send_message(chat_id, "Этот матч уже используется в другой ставке.")
         elif data.startswith("structure:"):
+            draft = self._draft(telegram_id)
+            if draft and draft.composer_version == 2:
+                # Compatibility for an old card or an interrupted pre-v2
+                # test path: user-facing cards never expose this callback.
+                draft.composer_version, draft.phase = 1, "E1"
             self._set_structure(chat_id, telegram_id, data)
         elif data.startswith("match:"):
             self._select_match(chat_id, telegram_id, data.removeprefix("match:"))
@@ -1378,7 +1415,7 @@ class BotService:
             self.draft_store.delete(telegram_id)
 
     def _draft_snapshot(self, telegram_id: str, draft: Draft) -> dict:
-        return {
+        snapshot = {
             "draft_id": draft.draft_id,
             "participant_id": telegram_id,
             "chat_id": draft.chat_id,
@@ -1557,7 +1594,7 @@ class BotService:
         used = {event.match_id for bet in draft.bets for event in bet.events} | {event.match_id for event in draft.current_events}
         current_type = BetType.SINGLE if len(draft.bets) < draft.structure[0] else BetType.EXPRESS
         available = [fixture for fixture in round_.fixtures if fixture.match_id not in used]
-        label = "ординар" if current_type == BetType.SINGLE else f"экспресс, плечо {len(draft.current_events) + 1}"
+        label = "ординар" if current_type == BetType.SINGLE else f"экспресс, событие {len(draft.current_events) + 1}"
         self._draft_screen(chat_id, telegram_id, f"Ставка {len(draft.bets) + 1}/5 — {label}. Выберите матч:", [(f"{item.home_team} — {item.away_team}", f"match:{item.match_id}") for item in available], back=True, cancel=True)
 
     def _select_match(self, chat_id: int, telegram_id: str, match_id: str) -> None:
@@ -1595,7 +1632,7 @@ class BotService:
         elif len(draft.current_events) == 3:
             self._finish_bet(chat_id, telegram_id)
         else:
-            self._draft_screen(chat_id, telegram_id, f"В экспрессе {len(draft.current_events)} плечо(а). Добавить матч или завершить экспресс?", [("Добавить плечо", "express:add"), ("Завершить экспресс", "express:done")], back=True, cancel=True)
+            self._draft_screen(chat_id, telegram_id, f"В экспрессе выбрано {len(draft.current_events)} события. Добавить матч или завершить экспресс?", [("Добавить событие", "express:add"), ("Завершить экспресс", "express:done")], back=True, cancel=True)
 
     def _finish_bet(self, chat_id: int, telegram_id: str) -> None:
         draft = self._draft(telegram_id)
@@ -1766,14 +1803,14 @@ class BotService:
             self._save_draft(telegram_id)
 
     def _draft_snapshot(self, telegram_id: str, draft: Draft) -> dict:
-        return {
-            "version": 4, "draft_id": draft.draft_id, "participant_id": telegram_id,
+        snapshot = {
+            "version": 5, "draft_id": draft.draft_id, "participant_id": telegram_id,
             "chat_id": draft.chat_id, "round_id": draft.round_id, "state": "active",
             "revision": draft.revision, "active_message_id": draft.active_message_id,
             "reanchor_pending": draft.reanchor_pending,
             "reanchor_predecessor_id": draft.reanchor_predecessor_id,
             "structure": list(draft.structure),
-            "bets": [{"type": bet.bet_type.value, "stake": bet.stake, "bet_id": bet.bet_id, "events": [self._event_snapshot(event) for event in bet.events]} for bet in draft.bets],
+            "bets": [{"type": bet.bet_type.value, "stake": bet.stake, "bet_id": bet.bet_id, "slot_index": bet.slot_index, "events": [self._event_snapshot(event) for event in bet.events]} for bet in draft.bets],
             "current_events": [self._event_snapshot(event) for event in draft.current_events],
             "selected_match_id": draft.selected_match_id, "phase": draft.phase,
             "expresses": [[self._event_snapshot(event) for event in express] for express in draft.expresses],
@@ -1782,12 +1819,22 @@ class BotService:
             "replacement_kind": draft.replacement_kind, "selection_slots": draft.selection_slots,
             "return_phase": draft.return_phase, "pending_reset": draft.pending_reset,
             "stake_edit": draft.stake_edit, "stake_edit_index": draft.stake_edit_index,
+            "composer_version": draft.composer_version, "slot_index": draft.slot_index,
+            "slot_bet_type": draft.slot_bet_type,
         }
+        if draft.composer_version != 2:
+            snapshot["version"] = 4
+            snapshot.pop("composer_version")
+            snapshot.pop("slot_index")
+            snapshot.pop("slot_bet_type")
+            for bet in snapshot["bets"]:
+                bet.pop("slot_index")
+        return snapshot
 
     def _draft_from_snapshot(self, value: dict) -> Draft:
         def event(item: dict) -> BetEvent:
             return BetEvent(item["match_id"], Market(item["market"]), Decimal(item["odds"]), Decimal(item["total_line"]) if item["total_line"] is not None else None)
-        bets = [DraftBet(BetType(item["type"]), [event(part) for part in item["events"]], item["stake"], item.get("bet_id", "")) for item in value["bets"]]
+        bets = [DraftBet(BetType(item["type"]), [event(part) for part in item["events"]], item["stake"], item.get("bet_id", ""), item.get("slot_index", 0)) for item in value["bets"]]
         draft = Draft(
             round_id=value["round_id"], structure=tuple(value["structure"]), bets=bets,
             current_events=[event(item) for item in value["current_events"]],
@@ -1801,6 +1848,8 @@ class BotService:
             selection_slots=dict(value.get("selection_slots", {})), return_phase=value["return_phase"],
             pending_reset=value.get("pending_reset"), stake_edit=value.get("stake_edit"),
             stake_edit_index=value.get("stake_edit_index", 0),
+            composer_version=value.get("composer_version", 1), slot_index=value.get("slot_index", 0),
+            slot_bet_type=value.get("slot_bet_type"),
         )
         self._ensure_identities(draft)
         return draft
@@ -1838,9 +1887,10 @@ class BotService:
         if self.now() >= round_.deadline_msk:
             self.telegram.send_message(chat_id, "Дедлайн тура уже прошёл: новый прогноз и замена закрыты.")
             return
-        self.drafts[telegram_id] = Draft(round_id=round_.round_id, draft_id=secrets.token_hex(4), chat_id=chat_id)
+        phase = "S0" if self.composer_version == 2 else "E1"
+        self.drafts[telegram_id] = Draft(round_id=round_.round_id, draft_id=secrets.token_hex(4), chat_id=chat_id, phase=phase, composer_version=self.composer_version)
         self._save_draft(telegram_id)
-        self._render_matches(chat_id, telegram_id)
+        (self._render_slot_dashboard if self.composer_version == 2 else self._render_matches)(chat_id, telegram_id)
 
     def _start_replacement(self, chat_id: int, telegram_id: str) -> None:
         existing_draft = self._draft(telegram_id)
@@ -1855,9 +1905,10 @@ class BotService:
         if not round_ or self.now() >= round_.deadline_msk:
             self.telegram.send_message(chat_id, "Дедлайн тура уже прошёл: замена закрыта.")
             return
-        self.drafts[telegram_id] = Draft(round_id=round_.round_id, draft_id=secrets.token_hex(4), chat_id=chat_id, replacement=True, replacement_kind="full")
+        phase = "S0" if self.composer_version == 2 else "E1"
+        self.drafts[telegram_id] = Draft(round_id=round_.round_id, draft_id=secrets.token_hex(4), chat_id=chat_id, replacement=True, replacement_kind="full", phase=phase, composer_version=self.composer_version)
         self._save_draft(telegram_id)
-        self._render_matches(chat_id, telegram_id)
+        (self._render_slot_dashboard if self.composer_version == 2 else self._render_matches)(chat_id, telegram_id)
 
     def _render_full_replace_confirmation(self, chat_id: int, telegram_id: str) -> None:
         """R0 is intentionally not a draft: decline never creates state."""
@@ -1883,10 +1934,11 @@ class BotService:
         structure = (sum(bet.bet_type == BetType.SINGLE for bet in prediction.bets), sum(bet.bet_type == BetType.EXPRESS for bet in prediction.bets))
         return Draft(
             round_id=prediction.round_id, structure=structure,
-            bets=[DraftBet(bet.bet_type, list(bet.events), bet.stake, self._new_identity("b")) for bet in prediction.bets],
-            current_events=selected, phase="R1", draft_id=secrets.token_hex(4), chat_id=chat_id,
+            bets=[DraftBet(bet.bet_type, list(bet.events), bet.stake, self._new_identity("b"), index) for index, bet in enumerate(prediction.bets, 1)],
+            current_events=[] if self.composer_version == 2 else selected, phase="S0" if self.composer_version == 2 else "R1", draft_id=secrets.token_hex(4), chat_id=chat_id,
             expresses=expresses, replacement=True, replacement_kind="correction",
             selection_slots={event.match_id: self._new_identity("s") for event in selected},
+            composer_version=self.composer_version,
         )
 
     def _start_correction(self, chat_id: int, telegram_id: str) -> None:
@@ -1909,7 +1961,7 @@ class BotService:
         # untouched until the ordinary final confirm path succeeds.
         self.drafts[telegram_id] = self._clone_confirmed_draft(prediction, chat_id)
         self._save_draft(telegram_id)
-        self._render_correction_hub(chat_id, telegram_id)
+        (self._render_slot_dashboard if self.composer_version == 2 else self._render_correction_hub)(chat_id, telegram_id)
 
     def _correction_route(self, chat_id: int, telegram_id: str, phase: str) -> None:
         draft = self._draft(telegram_id)
@@ -1968,6 +2020,10 @@ class BotService:
 
     @staticmethod
     def _draft_progress(draft: Draft) -> str:
+        if draft.composer_version == 2:
+            placed = len(draft.bets)
+            funded = len([bet for bet in draft.bets if bet.stake is not None])
+            return f"Этап: сборка пяти ставок.\nСтавки: {placed}/5 · суммы: {funded}/5."
         phase = {
             "E1": "выбор матчей",
             "E2": "выбор события",
@@ -2057,12 +2113,187 @@ class BotService:
             return
         self._show_my(chat_id, telegram_id)
 
+    @staticmethod
+    def _slot_bets(draft: Draft) -> list[DraftBet]:
+        return sorted(draft.bets, key=lambda bet: bet.slot_index or 99)
+
+    @staticmethod
+    def _slot_structure_valid(draft: Draft) -> bool:
+        if len(draft.bets) != 5 or any(not bet.events or bet.slot_index not in range(1, 6) for bet in draft.bets):
+            return False
+        singles = sum(bet.bet_type == BetType.SINGLE for bet in draft.bets)
+        expresses = sum(bet.bet_type == BetType.EXPRESS for bet in draft.bets)
+        used = [event.match_id for bet in draft.bets for event in bet.events]
+        return (singles, expresses) in {(4, 1), (3, 2)} and len(used) == len(set(used)) and all(
+            len(bet.events) == 1 if bet.bet_type == BetType.SINGLE else 2 <= len(bet.events) <= 3
+            for bet in draft.bets
+        )
+
+    def _render_slot_dashboard(self, chat_id: int, telegram_id: str) -> None:
+        draft, round_ = self._draft(telegram_id), self.repository.get_active_round()
+        if not draft or not round_:
+            return
+        draft.phase, draft.slot_index, draft.slot_bet_type = "S0", 0, None
+        by_slot = {bet.slot_index: bet for bet in draft.bets if bet.slot_index in range(1, 6)}
+        lines = [
+            "🧩 Соберите купон: пять ставок",
+            f"🏟️ Тур: {round_.round_id}",
+            "Сначала выберите слот, затем тип ставки и события. Матч можно использовать только один раз.",
+        ]
+        buttons = []
+        for index in range(1, 6):
+            bet = by_slot.get(index)
+            if not bet:
+                label = f"{index}. Добавить ставку"
+            elif bet.bet_type == BetType.SINGLE:
+                label = f"{index}. Ординар · {self._event_label(round_, bet.events[0])}"
+            else:
+                odds = _combined_odds(Bet(BetType.EXPRESS, 1, tuple(bet.events)))
+                label = f"{index}. Экспресс · {len(bet.events)} события · кэф {odds}"
+                lines.append(f"Ставка {index}: экспресс · текущий кэф {odds}.")
+            buttons.append((label, f"slot:open:{index}"))
+        singles = sum(bet.bet_type == BetType.SINGLE for bet in draft.bets)
+        expresses = sum(bet.bet_type == BetType.EXPRESS for bet in draft.bets)
+        lines.append(f"Сейчас: {singles} ординара, {expresses} экспресса. Допустимо: 4+1 или 3+2.")
+        if self._slot_structure_valid(draft):
+            buttons.append(("💰 Распределить банк", "bank"))
+        self._draft_screen(chat_id, telegram_id, "\n".join(lines), buttons, cancel=True)
+
+    def _open_slot(self, chat_id: int, telegram_id: str, index: int) -> None:
+        draft = self._draft(telegram_id)
+        if not draft or index not in range(1, 6):
+            return
+        draft.slot_index, draft.slot_bet_type, draft.current_events, draft.selected_match_id, draft.phase = index, None, [], None, "S1"
+        self._touch(telegram_id)
+        self._render_slot_type(chat_id, telegram_id)
+
+    def _render_slot_type(self, chat_id: int, telegram_id: str) -> None:
+        draft = self._draft(telegram_id)
+        if not draft or draft.slot_index not in range(1, 6):
+            return
+        previous = next((bet for bet in draft.bets if bet.slot_index == draft.slot_index), None)
+        suffix = " Текущая ставка будет заменена после сохранения." if previous else ""
+        self._draft_screen(
+            chat_id, telegram_id,
+            f"🧩 Ставка {draft.slot_index} из 5\nВыберите тип ставки.{suffix}",
+            [("Ординар · одно событие", f"slot:type:{draft.slot_index}:single"), ("Экспресс · 2–3 события", f"slot:type:{draft.slot_index}:express")],
+            back=True, cancel=True,
+        )
+
+    def _choose_slot_type(self, chat_id: int, telegram_id: str, index: int, kind: str) -> None:
+        draft = self._draft(telegram_id)
+        if not draft or draft.slot_index != index or kind not in {"single", "express"}:
+            return
+        draft.slot_bet_type, draft.phase, draft.match_page = kind, "S2", 0
+        self._touch(telegram_id)
+        self._render_slot_matches(chat_id, telegram_id)
+
+    def _render_slot_matches(self, chat_id: int, telegram_id: str) -> None:
+        draft, round_ = self._draft(telegram_id), self.repository.get_active_round()
+        if not draft or not round_ or draft.slot_bet_type not in {"single", "express"}:
+            return
+        pages = self._match_pages(round_)
+        draft.match_page = max(0, min(draft.match_page, len(pages) - 1))
+        selected_ids = {event.match_id for event in draft.current_events}
+        occupied = {event.match_id for bet in draft.bets if bet.slot_index != draft.slot_index for event in bet.events}
+        buttons = []
+        for fixture in pages[draft.match_page]:
+            if fixture.match_id in occupied:
+                label = f"🔒 {fixture.home_team} — {fixture.away_team}"
+                action = "slot:occupied"
+            else:
+                label = f"{'✅ ' if fixture.match_id in selected_ids else ''}{fixture.home_team} — {fixture.away_team}"
+                action = f"slot:match:{fixture.match_id}"
+            buttons.append((label, action))
+        need = "одно событие" if draft.slot_bet_type == "single" else "2–3 события"
+        selected = "\n".join(f"• {self._event_label(round_, event)}" for event in draft.current_events) or "—"
+        buttons += [("◀️", "slot:page:-1"), ("▶️", "slot:page:+1")]
+        if (draft.slot_bet_type == "single" and len(draft.current_events) == 1) or (draft.slot_bet_type == "express" and len(draft.current_events) >= 2):
+            buttons.append(("✅ Сохранить ставку", "slot:save"))
+        self._draft_screen(chat_id, telegram_id, f"⚽ Ставка {draft.slot_index}: {('ординар' if draft.slot_bet_type == 'single' else 'экспресс')}\nНужно: {need}.\nВыбрано:\n{selected}\nСтраница {draft.match_page + 1}/{len(pages)}", buttons, back=True, cancel=True)
+
+    def _slot_match(self, chat_id: int, telegram_id: str, match_id: str) -> None:
+        draft, round_ = self._draft(telegram_id), self.repository.get_active_round()
+        if not draft or not round_ or draft.phase != "S2":
+            return
+        fixture = self._fixture(round_, match_id)
+        if not fixture or any(event.match_id == match_id for bet in draft.bets if bet.slot_index != draft.slot_index for event in bet.events):
+            return
+        draft.selected_match_id, draft.phase = match_id, "S3"
+        self._touch(telegram_id)
+        self._render_slot_markets(chat_id, telegram_id)
+
+    def _slot_page(self, chat_id: int, telegram_id: str, delta: int) -> None:
+        draft, round_ = self._draft(telegram_id), self.repository.get_active_round()
+        if not draft or not round_:
+            return
+        draft.match_page = max(0, min(len(self._match_pages(round_)) - 1, draft.match_page + delta))
+        self._touch(telegram_id)
+        self._render_slot_matches(chat_id, telegram_id)
+
+    def _render_slot_markets(self, chat_id: int, telegram_id: str) -> None:
+        draft, round_ = self._draft(telegram_id), self.repository.get_active_round()
+        if not draft or not round_ or not draft.selected_match_id:
+            return
+        fixture = self._fixture(round_, draft.selected_match_id)
+        if not fixture:
+            return
+        buttons = []
+        for market, odds in fixture.odds.items():
+            suffix = f" {fixture.total_line}" if market in {Market.TB, Market.TM} else ""
+            selected = any(event.match_id == fixture.match_id and event.market == market for event in draft.current_events)
+            buttons.append((f"{'✅ ' if selected else ''}{market.value}{suffix} · {odds}", f"slot:market:{fixture.match_id}:{market.value}"))
+        buttons.append(("← К матчам", "slot:matches"))
+        self._draft_screen(chat_id, telegram_id, f"⚽ {fixture.home_team} — {fixture.away_team}\nВыберите один исход.", buttons, back=True, cancel=True)
+
+    def _slot_market(self, chat_id: int, telegram_id: str, match_id: str, market: Market) -> None:
+        draft, round_ = self._draft(telegram_id), self.repository.get_active_round()
+        if not draft or not round_ or draft.phase != "S3" or draft.selected_match_id != match_id:
+            return
+        fixture = self._fixture(round_, match_id)
+        if not fixture or market not in fixture.odds:
+            return
+        event = BetEvent(match_id, market, fixture.odds[market], fixture.total_line if market in {Market.TB, Market.TM} else None)
+        draft.current_events = [item for item in draft.current_events if item.match_id != match_id]
+        if draft.slot_bet_type == "single":
+            draft.current_events = [event]
+        elif len(draft.current_events) < 3:
+            draft.current_events.append(event)
+        draft.selected_match_id, draft.phase = None, "S2"
+        self._touch(telegram_id)
+        self._render_slot_matches(chat_id, telegram_id)
+
+    def _save_slot(self, chat_id: int, telegram_id: str) -> None:
+        draft = self._draft(telegram_id)
+        if not draft or draft.slot_index not in range(1, 6) or draft.slot_bet_type not in {"single", "express"}:
+            return
+        count = len(draft.current_events)
+        if (draft.slot_bet_type == "single" and count != 1) or (draft.slot_bet_type == "express" and count not in {2, 3}):
+            self.telegram.send_message(chat_id, "Для этой ставки выберите нужное число событий.")
+            return
+        bet = DraftBet(BetType.SINGLE if draft.slot_bet_type == "single" else BetType.EXPRESS, list(draft.current_events), None, self._new_identity("b"), draft.slot_index)
+        old = next((item for item in draft.bets if item.slot_index == draft.slot_index), None)
+        if old and old.bet_type == bet.bet_type and old.events == bet.events:
+            bet.bet_id, bet.stake = old.bet_id, old.stake
+        draft.bets = [item for item in draft.bets if item.slot_index != draft.slot_index] + [bet]
+        draft.bets = self._slot_bets(draft)
+        if old and (old.bet_type != bet.bet_type or old.events != bet.events):
+            for item in draft.bets:
+                item.stake = None
+        draft.current_events, draft.selected_match_id, draft.slot_bet_type, draft.phase = [], None, None, "S0"
+        self._touch(telegram_id)
+        self._render_slot_dashboard(chat_id, telegram_id)
+
     def _render_current(self, chat_id: int, telegram_id: str) -> None:
         draft = self._draft(telegram_id)
         if not draft:
             self._begin_prediction(chat_id, telegram_id)
             return
         if draft.phase == "L0": self._deadline_screen(chat_id, telegram_id)
+        elif draft.phase == "S0": self._render_slot_dashboard(chat_id, telegram_id)
+        elif draft.phase == "S1": self._render_slot_type(chat_id, telegram_id)
+        elif draft.phase == "S2": self._render_slot_matches(chat_id, telegram_id)
+        elif draft.phase == "S3": self._render_slot_markets(chat_id, telegram_id)
         elif draft.phase == "E1": self._render_matches(chat_id, telegram_id)
         elif draft.phase == "E2": self._select_match(chat_id, telegram_id, draft.selected_match_id or "")
         elif draft.phase == "E3": self._finish_bet(chat_id, telegram_id, render_only=True)
@@ -2558,6 +2789,12 @@ class BotService:
         draft = self._draft(telegram_id)
         if not draft:
             return
+        if draft.composer_version == 2 and not self._slot_structure_valid(draft):
+            self.telegram.send_message(chat_id, "Сначала заполните пять ставок по схеме 4+1 или 3+2, не повторяя матчи.")
+            self._render_slot_dashboard(chat_id, telegram_id)
+            return
+        if draft.composer_version == 2:
+            draft.bets = self._slot_bets(draft)
         if self._has_active_stakes(draft):
             draft.stake_edit, draft.stake_edit_index = [None] * 5, 0
         self._touch(telegram_id)
@@ -2656,7 +2893,8 @@ class BotService:
         for bet in prediction.bets:
             odds = _combined_odds(bet); title = "ОРДИНАР" if bet.bet_type == BetType.SINGLE else "ЭКСПРЕСС"
             lines += [f"\n{title}"] + [f"⚽ {self._event_label(round_, item)}" for item in bet.events] + [f"💵 {bet.stake} × {odds} = {(Decimal(bet.stake)*odds).quantize(Decimal('1'), rounding=ROUND_HALF_UP)}"]
-        self._draft_screen(chat_id, telegram_id, "\n".join(lines), [("✅ Подтвердить", "confirm"), ("💰 Изменить суммы", "bank"), ("🔄 Пересобрать экспрессы", "x:rebuild")], back=True, cancel=True)
+        edit_label, edit_action = ("🧩 Изменить ставки", "slot:dashboard") if draft.composer_version == 2 else ("🔄 Пересобрать экспрессы", "x:rebuild")
+        self._draft_screen(chat_id, telegram_id, "\n".join(lines), [("✅ Подтвердить", "confirm"), ("💰 Изменить суммы", "bank"), (edit_label, edit_action)], back=True, cancel=True)
 
     def _confirm(self, chat_id: int, telegram_id: str) -> None:
         draft, prediction, round_ = self._draft(telegram_id), self._prediction_from_draft(telegram_id), self.repository.get_active_round()
@@ -2719,7 +2957,13 @@ class BotService:
     def _back(self, chat_id: int, telegram_id: str) -> None:
         draft = self._draft(telegram_id)
         if not draft: self._menu(chat_id, "Черновик не найден."); return
-        if draft.phase == "E2": draft.phase = "E1"
+        if draft.phase == "S1":
+            draft.phase, draft.slot_index, draft.slot_bet_type, draft.current_events, draft.selected_match_id = "S0", 0, None, [], None
+        elif draft.phase == "S2":
+            draft.phase, draft.slot_index, draft.slot_bet_type, draft.current_events, draft.selected_match_id = "S0", 0, None, [], None
+        elif draft.phase == "S3":
+            draft.phase, draft.selected_match_id = "S2", None
+        elif draft.phase == "E2": draft.phase = "E1"
         elif draft.phase == "E3": draft.phase = "E1"
         elif draft.phase == "X0": draft.phase = "E1"
         elif draft.phase == "X1": draft.phase = "X0" if len(draft.current_events) == 7 and draft.express_index == 0 else "E1"
@@ -2731,12 +2975,12 @@ class BotService:
             elif draft.stake_edit is not None:
                 draft.stake_edit, draft.phase = None, "P1"
             else:
-                draft.phase = "X2"
+                draft.phase = "S0" if draft.composer_version == 2 else "X2"
         elif draft.phase == "B2":
             self._edit_stake_again(chat_id, telegram_id); return
         elif draft.phase == "W1":
             self._cancel_pending_reset(chat_id, telegram_id); return
-        elif draft.phase == "P1": draft.phase = "X2"
+        elif draft.phase == "P1": draft.phase = "S0" if draft.composer_version == 2 else "X2"
         elif draft.phase == "R1": draft.phase = "M1"
         elif draft.phase == "M1":
             self._menu(chat_id, "")
@@ -2778,8 +3022,11 @@ class BotService:
     def _prediction_from_draft(self, telegram_id: str) -> Prediction | None:
         draft = self._draft(telegram_id)
         if not draft or len(draft.bets) != 5 or any(bet.stake is None for bet in draft.bets): return None
+        if draft.composer_version == 2 and not self._slot_structure_valid(draft):
+            return None
         participant = self.repository.get_participant(telegram_id)
-        return Prediction(draft.round_id, participant.participant_id, tuple(Bet(bet.bet_type, bet.stake or 0, tuple(bet.events)) for bet in draft.bets), self.now()) if participant else None
+        bets = self._slot_bets(draft) if draft.composer_version == 2 else draft.bets
+        return Prediction(draft.round_id, participant.participant_id, tuple(Bet(bet.bet_type, bet.stake or 0, tuple(bet.events)) for bet in bets), self.now()) if participant else None
 
     def _menu(self, chat_id: int, prefix: str) -> None:
         round_ = self.repository.get_active_round()

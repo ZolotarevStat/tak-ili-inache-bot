@@ -27,7 +27,7 @@ class CjmV1Tests(unittest.TestCase):
         self.repo, self.tg = FakeRepository(), Telegram()
         self.round_ = import_fixtures(Path(__file__).resolve().parents[1] / "data" / "fixtures_sample.csv")
         self.repo.save_round(self.round_); self.now = [self.round_.deadline_msk - timedelta(minutes=10)]
-        self.bot = BotService(self.repo, self.tg, lambda: self.now[0], admin_ids={"99"})
+        self.bot = BotService(self.repo, self.tg, lambda: self.now[0], admin_ids={"99"}, composer_version=1)
         self.message("/start")
 
     def test_event_first_finishes_at_six_and_caps_at_nine(self):  # AC-01…AC-06
