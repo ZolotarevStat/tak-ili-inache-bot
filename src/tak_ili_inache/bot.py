@@ -29,6 +29,7 @@ from .reporting import (
     render_report_chart,
 )
 from .presentation import compact_match_label, public_event_label
+from .player_cards import build_player_cards, media_batches
 from .repository import Repository
 from .delivery import UnknownDeliveryError
 from .telegram_api import TelegramClient, TelegramHttpError
@@ -409,6 +410,8 @@ class BotService:
             self._publish_interim(chat_id, telegram_id, message.get("message_id"))
         elif data == "admin:export-predictions":
             self._export_predictions(chat_id, telegram_id)
+        elif data == "admin:player-cards-preview":
+            self._preview_player_cards(chat_id, telegram_id)
         elif data == "admin:results":
             self._result_matches(chat_id, telegram_id, message.get("message_id"))
         elif data == "admin:score":
@@ -538,6 +541,7 @@ class BotService:
             buttons.append(("Статус сдачи", "admin:status"))
             if predictions:
                 buttons.append(("Выгрузить прогнозы CSV", "admin:export-predictions"))
+                buttons.append(("Карточки игроков · предпросмотр", "admin:player-cards-preview"))
             if self.now() < round_.deadline_msk:
                 if smoke:
                     stage = "open (тестовый)"
@@ -1078,6 +1082,40 @@ class BotService:
         self.telegram.send_message(
             chat_id,
             "CSV выгружен в длинном формате: игрок → ставка → событие. Telegram ID в файл не включён.",
+            _keyboard([("Назад в админ-меню", "admin:menu")]),
+        )
+
+    def _preview_player_cards(self, chat_id: int, telegram_id: str) -> None:
+        """Render the current round privately; never publish preview cards to the group."""
+        if not self._is_admin(telegram_id):
+            self.telegram.send_message(chat_id, "Недостаточно прав.")
+            return
+        round_ = self.repository.get_active_round()
+        if not round_:
+            self.telegram.send_message(chat_id, "Активного тура нет.")
+            return
+        predictions = self.repository.latest_predictions(round_.round_id)
+        if not predictions:
+            self.telegram.send_message(chat_id, "В активном туре пока нет подтверждённых прогнозов.")
+            return
+        cards = build_player_cards(
+            round_, predictions, self.repository.results(round_.round_id), self.repository.participants()
+        )
+        batches = media_batches(cards)
+        for batch_no, batch in enumerate(batches, 1):
+            caption = f"Тур {round_.round_id} · карточки игроков · батч {batch_no}/{len(batches)}"
+            if len(batch) == 1:
+                card = batch[0]
+                self._delivery_telegram.send_photo_bytes(chat_id, card.filename, card.content, caption)
+            else:
+                self._delivery_telegram.send_media_group_bytes(
+                    chat_id,
+                    tuple((card.filename, card.content) for card in batch),
+                    caption,
+                )
+        self._delivery_telegram.send_message(
+            chat_id,
+            f"Предпросмотр отправлен: {len(cards)} карточек, батчей — {len(batches)}. В турнирную группу ничего не опубликовано.",
             _keyboard([("Назад в админ-меню", "admin:menu")]),
         )
 

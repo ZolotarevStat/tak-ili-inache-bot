@@ -5,10 +5,12 @@ import unittest
 from datetime import timedelta
 from pathlib import Path
 import tempfile
+from unittest.mock import patch
 
 from tak_ili_inache.bot import BotService, _release_data_path
 from tak_ili_inache.fake_repository import FakeRepository
 from tak_ili_inache.fixtures import import_fixtures
+from tak_ili_inache.reporting import RenderedPng
 
 
 class FakeTelegram:
@@ -20,6 +22,7 @@ class FakeTelegram:
         self.document_parse_modes: list[str | None] = []
         self.photos: list[tuple[int, str, str]] = []
         self.photo_bytes: list[tuple[int, str, bytes, str]] = []
+        self.media_groups: list[tuple[int, tuple[tuple[str, bytes], ...], str]] = []
         self.edits: list[tuple[int, int, str, dict | None]] = []
         self._message_id = 0
         self.send_calls = 0
@@ -56,6 +59,9 @@ class FakeTelegram:
     def send_photo_bytes(self, chat_id, filename, content, caption=""):
         self.photo_bytes.append((chat_id, filename, content, caption))
         self.photos.append((chat_id, filename, caption))
+
+    def send_media_group_bytes(self, chat_id, media, caption=""):
+        self.media_groups.append((chat_id, tuple(media), caption))
 
 
 class BotFlowTests(unittest.TestCase):
@@ -207,6 +213,43 @@ class BotFlowTests(unittest.TestCase):
         self.assertIn("Опубликовать прогнозы", labels)
         self.assertIn("Скоринг", labels)
         self.assertNotIn("Внести результаты", labels)
+
+    def test_admin_player_cards_preview_is_private_and_batched_by_ten(self) -> None:
+        repo, tg = FakeRepository(), FakeTelegram()
+        repo.save_round(self.round_)
+        participant = repo.register_participant("42", "Игрок")
+        base = __import__("test_validators").valid_prediction()
+        repo.save_prediction(base.__class__("R1", participant.participant_id, base.bets, base.submitted_at_msk))
+        bot = BotService(repo, tg, lambda: self.round_.deadline_msk, admin_ids={"99"}, tournament_chat_id=-100)
+        cards = tuple(RenderedPng(f"player-card-{index:02}.png", b"PNG") for index in range(1, 21))
+
+        bot.handle_update({"message": {"chat": {"id": 9, "type": "private"}, "from": {"id": 99}, "text": "/admin"}})
+        self.assertIn("Карточки игроков · предпросмотр", _labels(tg.messages[-1][2]))
+        with patch("tak_ili_inache.bot.build_player_cards", return_value=cards):
+            self._admin_callback(bot, tg, "admin:player-cards-preview")
+
+        self.assertEqual([len(item[1]) for item in tg.media_groups], [10, 10])
+        self.assertTrue(all(item[0] == 9 for item in tg.media_groups))
+        self.assertFalse(any(item[0] == -100 for item in tg.media_groups))
+        self.assertIn("В турнирную группу ничего не опубликовано", tg.messages[-1][1])
+
+    def test_admin_player_cards_preview_uses_single_photo_for_one_player(self) -> None:
+        repo, tg = FakeRepository(), FakeTelegram()
+        repo.save_round(self.round_)
+        participant = repo.register_participant("42", "Игрок")
+        base = __import__("test_validators").valid_prediction()
+        repo.save_prediction(base.__class__("R1", participant.participant_id, base.bets, base.submitted_at_msk))
+        bot = BotService(repo, tg, lambda: self.round_.deadline_msk, admin_ids={"99"}, tournament_chat_id=-100)
+        card = RenderedPng("player-card-01.png", b"PNG")
+
+        with patch("tak_ili_inache.bot.build_player_cards", return_value=(card,)):
+            self._admin_callback(bot, tg, "admin:player-cards-preview")
+
+        self.assertEqual(tg.media_groups, [])
+        self.assertEqual(
+            tg.photo_bytes,
+            [(9, card.filename, card.content, "Тур R1 · карточки игроков · батч 1/1")],
+        )
 
     def test_admin_synthetic_tour_import_publish_results_and_score(self) -> None:
         repo, tg = FakeRepository(), FakeTelegram()

@@ -10,7 +10,7 @@ import time
 import uuid
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Protocol, Sequence
 
 from .delivery import DeliveryPolicy, UnknownDeliveryError
 from .transport import FamilyConnector, PreSendFailure, TransportConfig
@@ -28,6 +28,7 @@ class TelegramClient(Protocol):
     def send_document(self, chat_id: int, path: str, caption: str = "", parse_mode: str | None = None) -> None: ...
     def send_photo(self, chat_id: int, path: str, caption: str = "") -> None: ...
     def send_photo_bytes(self, chat_id: int, filename: str, content: bytes, caption: str = "") -> None: ...
+    def send_media_group_bytes(self, chat_id: int, media: Sequence[tuple[str, bytes]], caption: str = "") -> None: ...
 
 
 class TelegramHttpError(RuntimeError):
@@ -103,6 +104,17 @@ class TelegramApi:
         """Upload a rendered image without creating a filesystem artifact."""
         self._deliver(lambda: self._upload_bytes("sendPhoto", "photo", chat_id, filename, content, caption))
 
+    def send_media_group_bytes(
+        self,
+        chat_id: int,
+        media: Sequence[tuple[str, bytes]],
+        caption: str = "",
+    ) -> None:
+        """Upload one Telegram photo album without filesystem artifacts."""
+        if not 2 <= len(media) <= 10:
+            raise ValueError("Telegram media groups require between 2 and 10 items.")
+        self._deliver(lambda: self._upload_media_group_bytes(chat_id, media, caption))
+
     def _deliver(self, operation: Callable[[], Any]) -> Any:
         attempt = 0
 
@@ -152,6 +164,48 @@ class TelegramApi:
         if parse_mode is not None:
             parts.insert(2, f"--{boundary}\r\nContent-Disposition: form-data; name=\"parse_mode\"\r\n\r\n{parse_mode}\r\n".encode())
         data = self._json_request(f"/bot{self._token}/{method}", b"".join(parts), {"Content-Type": f"multipart/form-data; boundary={boundary}"}, 30, method)
+        if not data.get("ok"):
+            raise TelegramHttpError(200, _telegram_error_kind(data))
+
+    def _upload_media_group_bytes(
+        self,
+        chat_id: int,
+        media: Sequence[tuple[str, bytes]],
+        caption: str,
+    ) -> None:
+        boundary = uuid.uuid4().hex
+        descriptors = []
+        for index, (_filename, _content) in enumerate(media):
+            descriptor = {"type": "photo", "media": f"attach://photo_{index}"}
+            if index == 0 and caption:
+                descriptor["caption"] = caption
+            descriptors.append(descriptor)
+        parts = [
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n{chat_id}\r\n".encode(),
+            (
+                f"--{boundary}\r\nContent-Disposition: form-data; name=\"media\"\r\n\r\n"
+                + json.dumps(descriptors, ensure_ascii=False)
+                + "\r\n"
+            ).encode(),
+        ]
+        for index, (filename, content) in enumerate(media):
+            parts.extend((
+                (
+                    f"--{boundary}\r\nContent-Disposition: form-data; name=\"photo_{index}\"; "
+                    f"filename=\"{filename}\"\r\nContent-Type: "
+                    f"{mimetypes.guess_type(filename)[0] or 'application/octet-stream'}\r\n\r\n"
+                ).encode(),
+                content,
+                b"\r\n",
+            ))
+        parts.append(f"--{boundary}--\r\n".encode())
+        data = self._json_request(
+            f"/bot{self._token}/sendMediaGroup",
+            b"".join(parts),
+            {"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            60,
+            "sendMediaGroup",
+        )
         if not data.get("ok"):
             raise TelegramHttpError(200, _telegram_error_kind(data))
 
