@@ -7,7 +7,7 @@
 | Package | `tak-ili-inache-bot` |
 | Version | `0.1.0` |
 | Release status | `ADMIN / CJM / LATE-CSV P1 R2 — LOCAL+REMOTE PASS / ACTIVE` |
-| Open gate | owner smoke: `/admin → Формат и пример CSV` must deliver both example documents |
+| Open gate | none for this release |
 | Application MVP baseline commit | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` |
 | S3/infra publication commit | `4a3540f98f6c310c7a842caaf9679218802b15a0` |
 | Active application feature commit | `79691ab` on `feature/group-admin-ux-p1` |
@@ -35,7 +35,10 @@ The immutable install, exact digest, tokenless transport canary `200/200`
 post-start strict health passed. Production is active/enabled with one worker,
 `NRestarts=0`, about 20.4 MiB memory and active round `20260908` preserved.
 Encrypted backup passed after activation and both backup/freshness timers are
-enabled and active. Automatic lexical prune was intentionally not run.
+enabled and active. Owner smoke at `11:06 MSK` confirmed that
+`/admin → Формат и пример CSV` delivers both `fixtures_sample.csv` and
+`late_predictions_example.csv`. Automatic lexical prune was intentionally not
+run.
 
 ## Admin operations, late CSV and noon-reminder r1 — LOCAL+REMOTE PASS / ACTIVE PRIOR
 

@@ -155,8 +155,7 @@ Current production release:
 `current` in-place. R1 меняет первый reminder с полуночи на `12:00 MSK`; r2
 исправляет CSV-template resolver для установленного wheel. Immutable install,
 remote suite/digest, transport canary, transaction, strict health и encrypted
-S3 backup прошли; owner smoke отправки обоих CSV-шаблонов остаётся ручной
-проверкой. Staged
+S3 backup прошли; owner smoke подтвердил отправку обоих CSV-шаблонов. Staged
 `0.1.0-reporting-heatmaps-excel-p1-20260827-local` immutable/stale и не является
 activation target.
 

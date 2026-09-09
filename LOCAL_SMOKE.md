@@ -24,8 +24,9 @@ Candidate `0.1.0-admin-cjm-ops-p1-r2-20260909-local`, runtime digest ×2
 добавляет installed-layout regression. Remote Python 3.13.5 `200/200`, exact
 digest, transport canary `200/200`, transaction, strict health и encrypted
 post-deploy backup прошли; r2 является активным production release. Ручной
-owner smoke должен подтвердить отправку обоих документов через
-`/admin → Формат и пример CSV`.
+owner smoke подтвердил отправку обоих документов через
+`/admin → Формат и пример CSV`: `fixtures_sample.csv` и
+`late_predictions_example.csv`.
 
 ## Обязательный внешний command-first canary
 
