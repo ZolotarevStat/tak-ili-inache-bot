@@ -79,7 +79,7 @@ def main() -> None:
     chat_id = os.environ.get("TOURNAMENT_CHAT_ID")
     liveness = LivenessStore(data_dir)
     service = BotService(CsvRepository(data_dir), build_telegram(token, liveness, os.environ), lambda: datetime.now(ZoneInfo("Europe/Moscow")), admin_ids=admin_ids, tournament_chat_id=int(chat_id) if chat_id else None, output_dir=os.path.join(data_dir, "output"), draft_store=DraftStore(data_dir))
-    asyncio.run(AsyncUpdateRuntime(service.telegram.get_updates, service.handle_update, liveness=liveness).run())
+    asyncio.run(AsyncUpdateRuntime(service.telegram.get_updates, service.handle_update, liveness=liveness, scheduled=service.process_scheduled_notifications).run())
 
 
 def configure_logging() -> None:

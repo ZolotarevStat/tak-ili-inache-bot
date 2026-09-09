@@ -237,9 +237,9 @@ class ReleaseOperationsTests(unittest.TestCase):
         manifest_id = re.search(r"^\| Release ID \| `([^`]+)` \|$", manifest, re.MULTILINE)
         self.assertIsNotNone(manifest_id)
         candidate_id = manifest_id.group(1)
-        self.assertEqual(candidate_id, "0.1.0-admin-grants-memory-png-p1-20260828-local")
+        self.assertEqual(candidate_id, "0.1.0-admin-cjm-ops-p1-20260909-local")
         stale_id = "0.1.0-reporting-heatmaps-excel-p1-20260827-local"
-        active_baseline = "0.1.0-admin-grants-memory-png-p1-20260828-local"
+        active_baseline = "0.1.0-admin-cjm-ops-p1-20260909-local"
         exported_ids = re.findall(r'^export TII_RELEASE_ID="([^"]+)"$', runbook, re.MULTILINE)
         self.assertEqual(len(exported_ids), 2)
         self.assertTrue(all(item == candidate_id for item in exported_ids))
@@ -250,7 +250,7 @@ class ReleaseOperationsTests(unittest.TestCase):
         manifest_digest = re.search(r"^\| Candidate runtime digest ×2 \| `(sha256:[0-9a-f]{64})` \|$", manifest, re.MULTILINE)
         self.assertIsNotNone(manifest_digest)
         runtime_digest = manifest_digest.group(1)
-        test_count = 197
+        test_count = 199
         self.assertNotIn("--no-build-isolation", runbook)
         for artifact in (manifest, smoke, runbook):
             self.assertIn(candidate_id, artifact)

@@ -10,7 +10,7 @@ from typing import Callable
 class AsyncUpdateRuntime:
     """Poll in one task; process different chats concurrently but serially per chat."""
 
-    def __init__(self, get_updates: Callable, handle_update: Callable, queue_size: int = 64, workers: int = 4, logger=None, liveness=None, sleep=asyncio.sleep, jitter=lambda delay: delay) -> None:
+    def __init__(self, get_updates: Callable, handle_update: Callable, queue_size: int = 64, workers: int = 4, logger=None, liveness=None, scheduled=None, sleep=asyncio.sleep, jitter=lambda delay: delay) -> None:
         self.get_updates, self.handle_update = get_updates, handle_update
         self.queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=queue_size)
         self.workers, self.logger = workers, logger or logging.getLogger(__name__)
@@ -18,6 +18,7 @@ class AsyncUpdateRuntime:
         self._locks: dict[str, asyncio.Lock] = {}
         self._seen: deque[int] = deque(maxlen=512)
         self.liveness = liveness
+        self.scheduled = scheduled
         self.sleep, self.jitter = sleep, jitter
         self.poll_failure_streak = 0
         self.last_poll_failed = False
@@ -45,6 +46,11 @@ class AsyncUpdateRuntime:
             self.offset = max(self.offset or update_id + 1, update_id + 1)
         if self.liveness:
             self.liveness.successful_poll()
+        if self.scheduled:
+            try:
+                await asyncio.to_thread(self.scheduled)
+            except Exception:
+                self.logger.warning("scheduled_task_fail kind=deadline_reminders")
         self.poll_failure_streak = 0
         self.last_poll_failed = False
         return self.offset

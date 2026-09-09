@@ -21,6 +21,7 @@ class FakeRepository(Repository):
         self._admin_grants: dict[str, AdminGrant] = {}
         self._admin_grant_revisions: dict[str, str] = {}
         self._admin_grant_event_no = 0
+        self._staged_round: Round | None = None
 
     def save_round(self, round_: Round, actor_id: str = "", imported_at: str = "") -> None:
         active = self.get_active_round()
@@ -82,6 +83,18 @@ class FakeRepository(Repository):
     def get_active_round(self) -> Round | None:
         return next((round_ for round_id, round_ in self._rounds.items() if self._round_status.get(round_id) == "active"), None)
 
+    def stage_round(self, round_: Round, actor_id: str = "", imported_at: str = "") -> None:
+        active = self.get_active_round()
+        if active and active.round_id == round_.round_id:
+            raise ValueError("The active round cannot be staged as next.")
+        self._staged_round = round_
+
+    def get_staged_round(self) -> Round | None:
+        return self._staged_round
+
+    def clear_staged_round(self) -> None:
+        self._staged_round = None
+
     def latest_predictions(self, round_id: str) -> tuple[Prediction, ...]:
         return tuple(item for (stored_round, _), item in self._latest.items() if stored_round == round_id)
 
@@ -124,7 +137,7 @@ class FakeRepository(Repository):
         return tuple(self._results[(round_id, item.match_id)] for item in round_.fixtures if (round_id, item.match_id) in self._results) if round_ else ()
 
     def raw_result_rows(self) -> list[dict[str, str]]:
-        return [{"round_id": round_id, "match_id": item.match_id, "winning_markets": json.dumps([market.value for market in item.winning_markets]), "returned_markets": json.dumps([market.value for market in item.returned_markets])} for (round_id, _), item in self._results.items()]
+        return [{"round_id": round_id, "match_id": item.match_id, "winning_markets": json.dumps([market.value for market in item.winning_markets]), "returned_markets": json.dumps([market.value for market in item.returned_markets]), "score_label": item.score_label} for (round_id, _), item in self._results.items()]
 
     def operation_done(self, operation_key: str) -> bool:
         return self._operations.get(operation_key) == "done"

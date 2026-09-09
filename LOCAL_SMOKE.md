@@ -11,19 +11,18 @@ export TELEGRAM_BOT_TOKEN='<TEST_BOT_TOKEN>'
 PYTHONPATH=src python3 -m tak_ili_inache.polling
 ```
 
-Локальный suite перед smoke active production release завершился как
-`Ran 197 tests` и `OK`. Новый candidate
-`0.1.0-admin-grants-memory-png-p1-20260828-local`, runtime digest ×2
-`sha256:f8e059cb922bb052ef9f03a4d366ac6537777d9f12f7d177ede9efd441cdc7a1`,
-включает fail-closed durable admin grants и отправляет publication PNG только
-как in-memory Telegram multipart bytes: disk PNG и S3 registry отсутствуют.
-Immutable staging, remote Python 3.13.5 `197/197`, exact digest, transaction,
-strict health и encrypted S3 backup до/после activation прошли. Owner action:
-через `/admin` открыть управление администраторами, выбрать Vitaly и
-подтвердить grant; Telegram ID не фиксировать. Bounded reporting smoke остаётся
-отдельной product-проверкой.
-Staged `0.1.0-reporting-heatmaps-excel-p1-20260827-local` immutable/stale и не
-может быть activation target.
+Локальный suite нового candidate завершился как `Ran 199 tests` и `OK`.
+Candidate `0.1.0-admin-cjm-ops-p1-20260909-local`, runtime digest ×2
+`sha256:2f6353efadb9e880a10b0fd9358c5f3cd06915e50853083a5654c1bf5660c5a9`,
+снижает максимум ставки до 2 000, добавляет reminders в 00:00 дня дедлайна и
+за час до него только несдавшим, late-CSV для администратора с запретом уже
+начавшихся матчей, staging следующего тура и подписи сохранённых счетов в
+админском вводе результатов. В CJM временно разрешены альтернативы одного
+матча, но продолжение и confirm блокируются, пока на матч не останется ровно
+один исход. Immutable remote install на Python 3.13.5 повторил `199/199` и exact
+digest; transport canary `200/200`, transactional activation, strict health и
+encrypted backup/freshness до и после activation прошли. Этот release активен;
+bounded owner product-smoke остаётся отдельной проверкой.
 
 ## Обязательный внешний command-first canary
 
@@ -98,6 +97,22 @@ export TOURNAMENT_CHAT_ID='тестовый_group_chat_id'
 8. Если во время изолированного smoke возник `pending` outbox step, открыть `/admin` → «Восстановить отправки», проверить чат получателя и осознанно отметить шаг доставленным или недоставленным. До решения pending не должен отправляться автоматически.
 9. Остановить и запустить worker с тем же persistent data directory; проверить `/my`, `/status` и отсутствие повторной отправки завершённых операций.
 10. Выполнить backup → restore в новый пустой каталог → health. Состояние тура и подтверждённый прогноз должны совпасть.
+
+### Admin / late-CSV re-smoke
+
+1. В админ-меню до закрытия текущего тура загрузить CSV другой линии. Вместо
+   перезаписи текущего тура выбрать сохранение следующей линии; после
+   закрытия текущего активировать именно staged тур.
+2. После дедлайна загрузить `data/late_predictions_example.csv` как документ с
+   именем, начинающимся на `late_predictions`. Проверить, что бот принимает
+   только зарегистрированное уникальное имя и отклоняет событие, kickoff
+   которого уже наступил; существующий прогноз не перезаписывается.
+3. Выбрать два рынка одного матча: card показывает оба как временные варианты,
+   но «Завершить» объясняет необходимость оставить один. Снять один вариант и
+   завершить набор; коэффициент экспресса на draft и review равен произведению
+   коэффициентов только его плеч.
+4. Внести счёт, вернуться к списку результатов и проверить формат
+   `✓ 1:2 · Команда — Команда`, а не только галочку.
 
 ### Group/admin UX P1
 

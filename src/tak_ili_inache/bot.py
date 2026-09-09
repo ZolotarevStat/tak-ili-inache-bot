@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from contextvars import ContextVar
@@ -16,6 +16,7 @@ from itertools import permutations
 from typing import Callable
 
 from .fixtures import import_fixtures
+from .late_predictions import import_late_predictions
 from .models import Bet, BetEvent, BetResult, BetType, Fixture, Market, Prediction, Round
 from .reporting import (
     build_interim_results_export,
@@ -140,6 +141,42 @@ class BotService:
             self._handle_message(update["message"])
         elif "callback_query" in update:
             self._handle_callback(update["callback_query"])
+
+    def process_scheduled_notifications(self) -> None:
+        """Send each deadline reminder at most once across restarts.
+
+        The polling runtime calls this after every successful long-poll.  A
+        durable operation key makes the method safe to call frequently.
+        """
+        round_ = self.repository.get_active_round()
+        if not round_:
+            return
+        now = self.now()
+        midnight = datetime.combine(round_.deadline_msk.date(), time.min, tzinfo=round_.deadline_msk.tzinfo)
+        checkpoints = (("day-start", midnight), ("one-hour", round_.deadline_msk - timedelta(hours=1)))
+        missing = {item.participant_id for item in self.repository.participants()} - {
+            item.participant_id for item in self.repository.latest_predictions(round_.round_id)
+        }
+        for label, trigger in checkpoints:
+            if not (trigger <= now < round_.deadline_msk):
+                continue
+            for participant in self.repository.participants():
+                if participant.participant_id not in missing:
+                    continue
+                operation_key = f"reminder-v1:{round_.round_id}:{label}:{participant.participant_id}"
+                if self.repository.begin_operation(operation_key) != "new":
+                    continue
+                try:
+                    self._delivery_telegram.send_message(
+                        int(participant.telegram_id),
+                        f"⏰ Напоминание: прогноз на тур {round_.round_id} ещё не получен. Дедлайн: {round_.deadline_msk:%d.%m %H:%M} МСК.",
+                    )
+                except Exception:
+                    # Keep the pending marker: automatic retry could duplicate
+                    # a Telegram delivery whose response was lost.
+                    logging.getLogger(__name__).warning("deadline_reminder_pending round=%s checkpoint=%s", round_.round_id, label)
+                    continue
+                self.repository.mark_operation_done(operation_key)
 
     def _actor_fingerprint(self, telegram_id: str) -> str | None:
         """Never emit a Telegram identifier; telemetry is disabled without a key."""
@@ -366,6 +403,10 @@ class BotService:
             self._resolve_outbox(chat_id, telegram_id, data.removeprefix("admin:outbox-retry:"), False)
         elif data == "admin:activate":
             self._activate_pending(chat_id, telegram_id)
+        elif data == "admin:stage":
+            self._stage_pending(chat_id, telegram_id)
+        elif data == "admin:activate-staged":
+            self._activate_staged(chat_id, telegram_id)
         elif data == "admin:replace":
             self._replace_pending(chat_id, telegram_id)
         elif data == "admin:close":
@@ -403,6 +444,9 @@ class BotService:
         if not str(document.get("file_name", "")).lower().endswith(".csv"):
             self.telegram.send_message(chat["id"], "Нужен файл fixtures CSV.")
             return
+        if str(document.get("file_name", "")).lower().startswith("late_predictions"):
+            self._handle_late_predictions_document(chat["id"], telegram_id, document)
+            return
         try:
             with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as target:
                 target.write(self.telegram.download_document(document))
@@ -424,13 +468,38 @@ class BotService:
             message = f"Проверка пройдена: тур {candidate.round_id}, матчей {len(candidate.fixtures)}, дедлайн {candidate.deadline_msk:%d.%m %H:%M}. Обновить линию этого же тура?"
             buttons = [("Перезаписать активный тур", "admin:replace"), ("Назад в админ-меню", "admin:menu")]
         elif existing:
-            self.pending_imports.pop(telegram_id, None)
-            message = f"Проверка пройдена: тур {candidate.round_id}. Активен тур {existing.round_id}; сначала завершите активный тур. История и текущие данные будут сохранены."
-            buttons = [("Назад в админ-меню", "admin:menu")]
+            message = (
+                f"Проверка пройдена: тур {candidate.round_id}, матчей {len(candidate.fixtures)}. "
+                f"Активен тур {existing.round_id}. Сохранить эту линию как следующий тур? "
+                "Она не изменит текущие прогнозы, результаты или расчёт."
+            )
+            buttons = [("Сохранить линию следующего тура", "admin:stage"), ("Назад в админ-меню", "admin:menu")]
         else:
             message = f"Проверка пройдена: тур {candidate.round_id}, матчей {len(candidate.fixtures)}, дедлайн {candidate.deadline_msk:%d.%m %H:%M}. Активировать?"
             buttons = [("Активировать новый тур", "admin:activate"), ("Назад в админ-меню", "admin:menu")]
         self.telegram.send_message(chat["id"], message, _keyboard(buttons))
+
+    def _handle_late_predictions_document(self, chat_id: int, telegram_id: str, document: dict) -> None:
+        round_ = self.repository.get_active_round()
+        if not round_:
+            self.telegram.send_message(chat_id, "Нет активного тура для загрузки опоздавших прогнозов.")
+            return
+        try:
+            predictions = import_late_predictions(self.telegram.download_document(document), round_, self.repository.participants(), self.now())
+            existing = {item.participant_id for item in self.repository.latest_predictions(round_.round_id)}
+            overlap = sorted({item.participant_id for item in predictions} & existing)
+            if overlap:
+                raise ValidationError("Late CSV не перезаписывает уже сохранённый прогноз участника.")
+            for index, prediction in enumerate(predictions):
+                self.repository.save_prediction(prediction, f"{self._current_update_id}:late:{index}")
+        except (ValidationError, UnicodeError) as error:
+            self.telegram.send_message(chat_id, f"Late CSV отклонён: {error}")
+            return
+        except Exception:
+            logging.getLogger(__name__).exception("late_csv_import_failed")
+            self.telegram.send_message(chat_id, "Не удалось обработать Late CSV. Отправьте файл повторно.")
+            return
+        self.telegram.send_message(chat_id, f"Late CSV принят: добавлено прогнозов — {len(predictions)}. Матчи, которые уже начались, не принимаются.")
 
     def _is_admin(self, telegram_id: str) -> bool:
         return telegram_id in self.admin_ids or any(item.telegram_id == telegram_id for item in self.repository.active_admin_grants())
@@ -471,9 +540,15 @@ class BotService:
                 else:
                     stage = "scoring"
                     buttons += [("Скоринг", "admin:score")]
+            staged = self.repository.get_staged_round()
+            if staged:
+                buttons.append((f"Следующая линия: {staged.round_id}", "admin:menu"))
         else:
             predictions = result_count = 0
             stage = "архивирован / нет активного"
+            staged = self.repository.get_staged_round()
+            if staged:
+                buttons.append((f"Активировать загруженный тур {staged.round_id}", "admin:activate-staged"))
         confirmed = len(self.repository.latest_predictions(round_.round_id)) if round_ else 0
         deadline = f"{round_.deadline_msk:%d.%m %H:%M} МСК" if round_ else "—"
         self._admin_card(
@@ -671,9 +746,11 @@ class BotService:
             self.telegram.send_message(chat_id, "Недостаточно прав.")
             return
         template = Path(__file__).resolve().parents[2] / "data" / "fixtures_sample.csv"
+        late_template = Path(__file__).resolve().parents[2] / "data" / "late_predictions_example.csv"
         self.telegram.send_message(chat_id, "CSV: 11–14 матчей одного round_id. Обязательные колонки: round_id, match_id, kickoff_msk (ISO с timezone или МСК), home_team, away_team, total_line, odds_p1, odds_x, odds_p2, odds_tb, odds_tm, odds_1x, odds_x2. Коэффициенты — конечные Decimal > 1. Ниже — валидный пример, замените его данными тура.")
         self.telegram.send_document(chat_id, str(template), "fixtures_example.csv")
-        self.telegram.send_message(chat_id, "После подготовки отправьте CSV документом сюда.", _keyboard([("Назад в админ-меню", "admin:menu")]))
+        self.telegram.send_document(chat_id, str(late_template), "late_predictions_example.csv")
+        self.telegram.send_message(chat_id, "Для опоздавших используйте второй шаблон: укажите точное display_name зарегистрированного участника и отправьте файл с именем late_predictions.csv после дедлайна. Уже начавшиеся матчи и существующие прогнозы отклоняются. После подготовки отправьте CSV документом сюда.", _keyboard([("Назад в админ-меню", "admin:menu")]))
 
     def _outbox_menu(self, chat_id: int, telegram_id: str) -> None:
         if not self._is_admin(telegram_id):
@@ -713,6 +790,31 @@ class BotService:
         self.repository.save_round(candidate, actor_id=telegram_id, imported_at=self.now().isoformat())
         self.pending_imports.pop(telegram_id, None)
         self.telegram.send_message(chat_id, f"Тур {candidate.round_id} активирован.")
+
+    def _stage_pending(self, chat_id: int, telegram_id: str) -> None:
+        candidate = self.pending_imports.get(telegram_id)
+        active = self.repository.get_active_round()
+        if not self._is_admin(telegram_id) or not candidate or not active or candidate.round_id == active.round_id:
+            self.telegram.send_message(chat_id, "Нет подтверждённой линии следующего тура.")
+            return
+        self.repository.stage_round(candidate, actor_id=telegram_id, imported_at=self.now().isoformat())
+        self.pending_imports.pop(telegram_id, None)
+        self.telegram.send_message(chat_id, f"Линия тура {candidate.round_id} сохранена. Активировать её можно после завершения {active.round_id}.")
+
+    def _activate_staged(self, chat_id: int, telegram_id: str) -> None:
+        if not self._is_admin(telegram_id):
+            self.telegram.send_message(chat_id, "Недостаточно прав.")
+            return
+        if self.repository.get_active_round():
+            self.telegram.send_message(chat_id, "Сначала завершите активный тур.")
+            return
+        candidate = self.repository.get_staged_round()
+        if not candidate:
+            self.telegram.send_message(chat_id, "Загруженной линии следующего тура нет.")
+            return
+        self.repository.save_round(candidate, actor_id=telegram_id, imported_at=self.now().isoformat())
+        self.repository.clear_staged_round()
+        self.telegram.send_message(chat_id, f"Тур {candidate.round_id} активирован из сохранённой линии.")
 
     def _replace_pending(self, chat_id: int, telegram_id: str) -> None:
         candidate = self.pending_imports.get(telegram_id)
@@ -987,8 +1089,11 @@ class BotService:
         if not round_:
             self.telegram.send_message(chat_id, "Активного тура нет.")
             return
-        saved = {item.match_id for item in self.repository.results(round_.round_id)}
-        buttons = [(f"{'✓ ' if item.match_id in saved else ''}{item.home_team} — {item.away_team}", f"admin:result:{item.match_id}") for item in round_.fixtures]
+        saved = {item.match_id: item for item in self.repository.results(round_.round_id)}
+        buttons = [(
+            f"{'✓ ' + saved[item.match_id].score_label if item.match_id in saved else '○'} · {item.home_team} — {item.away_team}",
+            f"admin:result:{item.match_id}",
+        ) for item in round_.fixtures]
         buttons.append(("Назад в админ-меню", "admin:menu"))
         prefix = f"{notice}\n\n" if notice else ""
         self._admin_card(chat_id, message_id, prefix + f"🧾 Результаты тура {round_.round_id}\n✓ Внесено: {len(saved)}/{len(round_.fixtures)}\n\nВыберите матч:", _keyboard(buttons))
@@ -1070,7 +1175,7 @@ class BotService:
         if not round_ or not fixture:
             self._result_matches(chat_id, telegram_id, message_id, "Матч больше не относится к активному туру.")
             return
-        self.repository.save_result(BetResult(match_id, frozenset(), frozenset(Market)), round_.round_id)
+        self.repository.save_result(BetResult(match_id, frozenset(), frozenset(Market), "возврат"), round_.round_id)
         self.result_drafts.pop((telegram_id, match_id), None)
         self._result_matches(chat_id, telegram_id, message_id, f"↩️ {fixture.home_team} — {fixture.away_team}: возврат")
 
@@ -1552,11 +1657,11 @@ class BotService:
 
     @staticmethod
     def _help() -> str:
-        return "Как играть: /start зарегистрирует вас; /predict — соберите купон; /my — покажет сохранённую версию. Выберите 4+1 или 3+2, ровно 5 ставок на 5 000 (500–2 500, шаг 50), не повторяя матч. До общего дедлайна прогноз можно заменить полностью; после него изменения закрыты. Если сценарий прервался — откройте /my или начните новый купон."
+        return "Как играть: /start зарегистрирует вас; /predict — соберите купон; /my — покажет сохранённую версию. Выберите 4+1 или 3+2, ровно 5 ставок на 5 000 (500–2 000, шаг 50), не повторяя матч. До общего дедлайна прогноз можно заменить полностью; после него изменения закрыты. Если сценарий прервался — откройте /my или начните новый купон."
 
     @staticmethod
     def _rules() -> str:
-        return "Ровно 5 ставок на 5 000: структуры 4+1 или 3+2. Ставка 500–2 500, шаг 50. Матч нельзя повторять."
+        return "Ровно 5 ставок на 5 000: структуры 4+1 или 3+2. Ставка 500–2 000, шаг 50. Матч нельзя повторять."
 
     # CJM v1 participant flow.  The legacy admin methods above deliberately
     # stay untouched; these methods replace only participant-draft behaviour.
@@ -1947,7 +2052,14 @@ class BotService:
         complete = ("✅ Завершить", "finish-events") if len(draft.current_events) >= 6 else ("✅ 6+ событий", "need6")
         buttons.append([("◀️", "page:m:-1"), ("▶️", "page:m:+1"), complete, ("✖️", "cancel")])
         chosen = "\n".join(f"• {self._event_label(round_, item)}" for item in draft.current_events)
-        self._draft_screen(chat_id, telegram_id, f"📝 Прогноз\n🏟️ Тур: {round_.round_id}\n⏰ Дедлайн: {round_.deadline_msk:%d.%m %H:%M}\nВыбрано событий: {len(draft.current_events)} из 6–9\n{chosen}\nВыберите матч · {draft.match_page + 1}/{len(pages)}:", buttons)
+        duplicates = _duplicate_match_ids(draft.current_events)
+        alternative_notice = ""
+        if duplicates:
+            labels = [self._fixture(round_, match_id) for match_id in duplicates]
+            alternative_notice = "\n⚠️ Для подтверждения оставьте по одному исходу на матч: " + ", ".join(
+                f"{item.home_team} — {item.away_team}" for item in labels if item
+            )
+        self._draft_screen(chat_id, telegram_id, f"📝 Прогноз\n🏟️ Тур: {round_.round_id}\n⏰ Дедлайн: {round_.deadline_msk:%d.%m %H:%M}\nВыбрано событий/вариантов: {len(draft.current_events)} из 6–9\n{chosen}{alternative_notice}\nВыберите матч · {draft.match_page + 1}/{len(pages)}:", buttons)
 
     def _select_match(self, chat_id: int, telegram_id: str, match_id: str) -> None:
         draft, round_ = self._draft(telegram_id), self.repository.get_active_round()
@@ -1979,11 +2091,19 @@ class BotService:
             label = f"{market.value}{' ' + str(fixture.total_line) if market in {Market.TB, Market.TM} else ''} · {odds}"
             buttons.append((label, f"market:{fixture.match_id}:{market.value}"))
         buttons = [buttons[index:index + 2] for index in range(0, len(buttons), 2)]
-        current = next((event for event in draft.current_events if event.match_id == fixture.match_id), None)
+        current = [event for event in draft.current_events if event.match_id == fixture.match_id]
+        selected_markets = {event.market for event in current}
+        buttons = [
+            [
+                (f"{'✅ ' if Market(button[1].rsplit(':', 1)[-1]) in selected_markets else ''}{button[0]}", button[1])
+                for button in row
+            ]
+            for row in buttons
+        ]
         if current:
             buttons.append([("🗑 Убрать матч", f"remove:{fixture.match_id}")])
-        current_line = f"\nТекущее событие: {self._event_label(round_, current)}" if current else ""
-        self._draft_screen(chat_id, telegram_id, f"⚽ {fixture.home_team} — {fixture.away_team}{current_line}\nВыберите событие:", buttons, back=True, cancel=True)
+        current_line = "\nВыбраны варианты:\n" + "\n".join(f"• {self._event_label(round_, event)}" for event in current) if current else ""
+        self._draft_screen(chat_id, telegram_id, f"⚽ {fixture.home_team} — {fixture.away_team}{current_line}\nМожно выбрать до трёх вариантов; перед подтверждением оставьте один:", buttons, back=True, cancel=True)
 
     def _select_market(self, chat_id: int, telegram_id: str, match_id: str, market: Market) -> None:
         draft, round_ = self._draft(telegram_id), self.repository.get_active_round()
@@ -1994,11 +2114,26 @@ class BotService:
         if not fixture or draft.selected_match_id != match_id or market not in fixture.odds: return
         replacement = BetEvent(match_id, market, fixture.odds[market], fixture.total_line if market in {Market.TB, Market.TM} else None)
         old = list(draft.current_events)
-        existing = next((item for item in draft.current_events if item.match_id == match_id), None)
-        candidate = old + [replacement] if existing is None else (old if existing == replacement else [replacement if item.match_id == match_id else item for item in draft.current_events])
+        existing = next((item for item in draft.current_events if item == replacement), None)
+        # A fresh draft may keep several alternatives for one match.  The
+        # finish/confirm guard below refuses to make them a prediction until
+        # the player keeps only one. Composed coupons retain replacement.
+        if not draft.bets:
+            same_match = [item for item in old if item.match_id == match_id]
+            if existing:
+                candidate = [item for item in old if item != replacement]
+            elif len(same_match) >= 3:
+                self.telegram.send_message(chat_id, "Для одного матча можно держать не более трёх вариантов.")
+                self._render_event_choices(chat_id, telegram_id)
+                return
+            else:
+                candidate = old + [replacement]
+        else:
+            same_match = [item for item in old if item.match_id == match_id]
+            candidate = old if existing else [replacement if item.match_id == match_id else item for item in old]
         # Replacing a market for the same selected match is compatible: slots,
         # bet identities and their stakes stay intact; only odds/payout change.
-        if old != candidate and existing is not None:
+        if old != candidate and draft.bets and same_match:
             draft.current_events = candidate
             self._replace_event_references(draft, replacement)
             draft.phase, draft.selected_match_id = "E1", None
@@ -2049,6 +2184,10 @@ class BotService:
         if count < 6:
             self.telegram.send_message(chat_id, f"Выберите ещё {6-count} событие(я).")
             self._render_matches(chat_id, telegram_id); return
+        if _duplicate_match_ids(draft.current_events):
+            self.telegram.send_message(chat_id, "Перед продолжением оставьте по одному исходу для каждого матча. Варианты одного матча нельзя одновременно подтвердить.")
+            self._render_matches(chat_id, telegram_id)
+            return
         if not render_only:
             draft.phase = "E3"
             self._touch(telegram_id)
@@ -2116,7 +2255,13 @@ class BotService:
                 label, action = f"▫️ {self._event_label(round_, item)}", f"x:t:{item.match_id}"
             buttons.append((label, action))
         if len(selected) == sizes[draft.express_index]: buttons.append(("✅ Экспресс готов", "x:done"))
-        text = f"🎯 Экспресс {draft.express_index+1} из {len(sizes)}\nНужно событий: {sizes[draft.express_index]}\n" + "\n".join(f"• {self._event_label(round_, item)}" for item in selected)
+        current_odds = _combined_odds(Bet(BetType.EXPRESS, 1, tuple(selected)))
+        text = (
+            f"🎯 Экспресс {draft.express_index+1} из {len(sizes)}\n"
+            f"Нужно событий: {sizes[draft.express_index]}\n"
+            f"Итоговый кэф сейчас: {current_odds}\n" +
+            "\n".join(f"• {self._event_label(round_, item)}" for item in selected)
+        )
         self._draft_screen(chat_id, telegram_id, text, buttons, back=True, cancel=True)
 
     def _express_action(self, chat_id: int, telegram_id: str, data: str) -> None:
@@ -2315,7 +2460,9 @@ class BotService:
         if not self._composition_valid(draft): draft.phase = "X1"; self._render_express(chat_id, telegram_id); return
         draft.phase, draft.bets = "X2", self._build_bets(draft)
         lines = ["🎯 Экспрессы собраны"]
-        for index, express in enumerate(draft.expresses, 1): lines.append(f"Экспресс {index}: " + "; ".join(self._event_label(round_, item) for item in express))
+        for index, express in enumerate(draft.expresses, 1):
+            odds = _combined_odds(Bet(BetType.EXPRESS, 1, tuple(express)))
+            lines.append(f"Экспресс {index} · кэф {odds}: " + "; ".join(self._event_label(round_, item) for item in express))
         buttons = [("💰 Распределить банк", "bank"), ("🔄 Пересобрать экспрессы", "x:rebuild")]
         if len(draft.current_events) == 7:
             buttons.append(("↔️ Сменить схему", "x:schema"))
@@ -2367,7 +2514,7 @@ class BotService:
             draft.phase = "P1"; self._preview(chat_id, telegram_id); return
         draft.phase = "B1"
         remaining, minimum, maximum = self._stake_limits(values, index, len(draft.bets))
-        recommended = [minimum] if minimum == maximum else [value for value in (500, 750, 1000, 1500, 2500, 2000) if minimum <= value <= maximum]
+        recommended = [minimum] if minimum == maximum else [value for value in (500, 750, 1000, 1500, 2000) if minimum <= value <= maximum]
         old_value = draft.bets[index].stake
         if minimum != maximum and edit_mode and old_value is not None and minimum <= old_value <= maximum:
             recommended = [old_value] + [value for value in recommended if value != old_value]
@@ -2410,7 +2557,7 @@ class BotService:
         if not draft or draft.stake_edit is None or len(draft.stake_edit) != 5 or any(value is None for value in draft.stake_edit) or sum(draft.stake_edit) != BANK:
             self.telegram.send_message(chat_id, "Новое распределение должно содержать пять сумм и итог 5 000."); return
         if any(not MIN_STAKE <= int(value) <= MAX_STAKE or int(value) % STAKE_STEP for value in draft.stake_edit):
-            self.telegram.send_message(chat_id, "Введите суммы от 500 до 2 500 с шагом 50."); return
+            self.telegram.send_message(chat_id, "Введите суммы от 500 до 2 000 с шагом 50."); return
         for bet, value in zip(draft.bets, draft.stake_edit): bet.stake = value
         draft.stake_edit, draft.stake_edit_index, draft.phase = None, 0, "P1"
         self._touch(telegram_id); self._preview(chat_id, telegram_id)
@@ -2620,6 +2767,17 @@ def _combined_odds(bet: Bet) -> Decimal:
     for event in bet.events:
         result *= event.odds_snapshot
     return result
+
+
+def _duplicate_match_ids(events: list[BetEvent]) -> list[str]:
+    """Return duplicate match IDs once, preserving selection order."""
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for event in events:
+        if event.match_id in seen and event.match_id not in duplicates:
+            duplicates.append(event.match_id)
+        seen.add(event.match_id)
+    return duplicates
 
 
 def _chunks(lines: list[str], limit: int) -> list[list[str]]:

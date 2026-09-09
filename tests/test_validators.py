@@ -66,6 +66,12 @@ class PredictionValidationTests(unittest.TestCase):
         bad_step = Prediction("R1", "p1", (Bet(BetType.SINGLE, 1025, (event(0),)),) + p.bets[1:-1] + (Bet(BetType.EXPRESS, 1475, (event(4), event(5, Market.TB))),), p.submitted_at_msk)
         self._reject(bad_step, "шагом 50")
         self._reject(p, "прошёл", now=ROUND.deadline_msk)
+        over_limit = Prediction("R1", "p1", (
+            Bet(BetType.SINGLE, 500, (event(0),)), Bet(BetType.SINGLE, 500, (event(1),)),
+            Bet(BetType.SINGLE, 500, (event(2),)), Bet(BetType.SINGLE, 1000, (event(3),)),
+            Bet(BetType.EXPRESS, 2500, (event(4), event(5, Market.TB))),
+        ), p.submitted_at_msk)
+        self._reject(over_limit, "2 000")
 
     def test_rejects_duplicate_match_invalid_express_and_stale_odds(self) -> None:
         p = valid_prediction()

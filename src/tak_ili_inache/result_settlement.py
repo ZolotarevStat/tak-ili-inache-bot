@@ -69,4 +69,5 @@ def settle_score(
         fixture.match_id,
         frozenset(outcome_winners | total_winners),
         frozenset(total_returns),
+        f"{home.label}:{away.label}",
     )

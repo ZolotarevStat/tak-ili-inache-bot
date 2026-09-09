@@ -32,16 +32,22 @@ class CjmV1Tests(unittest.TestCase):
 
     def test_event_first_finishes_at_six_and_caps_at_nine(self):  # AC-01…AC-06
         self.message("/predict")
-        self.assertIn("Выбрано событий: 0 из 6–9", self.card()[2])
+        self.assertIn("Выбрано событий/вариантов: 0 из 6–9", self.card()[2])
         self.assertNotIn("4+1", self.card()[2])
         for match in ("M01", "M02", "M03", "M04", "M05"):
             self.pick(match)
         self.assertNotIn("Завершить выбор", self.labels())
         self.pick("M06"); self.assertIn("✅ Завершить", self.labels())
-        # A chosen match opens its events and replaces rather than appending.
+        # A chosen match may keep alternatives, but the draft cannot advance
+        # while it contains more than one outcome for that match.
         before = len(self.bot._draft("42").current_events)
         while not any(button["callback_data"].endswith("match:M01") for row in self.card()[3]["inline_keyboard"] for button in row): self.click("◀️")
         self.click_data(lambda value: value.endswith("match:M01")); self.click_data(lambda value: value.endswith(":Х"))
+        self.assertEqual(len(self.bot._draft("42").current_events), before + 1)
+        self.click("✅ Завершить")
+        self.assertIn("оставьте по одному исходу", self.tg.messages[-1][2])
+        while not any(button["callback_data"].endswith("match:M01") for row in self.card()[3]["inline_keyboard"] for button in row): self.click("◀️")
+        self.click_data(lambda value: value.endswith("match:M01")); self.click_data(lambda value: value.endswith(":П1"))
         self.assertEqual(len(self.bot._draft("42").current_events), before)
         for match in ("M07", "M08", "M09"): self.pick(match)
         self.assertEqual(len(self.bot._draft("42").current_events), 9)
@@ -58,6 +64,8 @@ class CjmV1Tests(unittest.TestCase):
                 draft = self.bot._draft("42"); self.assertEqual(draft.structure, expected)
                 for size in sizes:
                     self.choose_express(size)
+                    expected_odds = __import__("functools").reduce(lambda value, event: value * event.odds_snapshot, draft.expresses[-1], __import__("decimal").Decimal("1"))
+                    self.assertIn(f"Итоговый кэф сейчас: {expected_odds}", self.card()[2])
                     self.click("✅ Экспресс готов")
                 self.assertEqual([len(item) for item in draft.expresses], sizes)
                 self.assertEqual(len({event.match_id for group in draft.expresses for event in group}), sum(sizes))
@@ -130,7 +138,7 @@ class CjmV1Tests(unittest.TestCase):
         self.assertTrue(all(len(row) <= 2 for row in markup[:-1]))
         self.assertTrue(all("M0" not in button["text"] for row in markup for button in row))
         self.click_data(lambda value: value.endswith("match:M01"))
-        self.assertIn("Выберите событие", self.card()[2]); self.assertNotIn("рынок", self.card()[2].lower())
+        self.assertIn("Можно выбрать до трёх вариантов", self.card()[2]); self.assertNotIn("рынок", self.card()[2].lower())
         self.assertEqual(sum(1 for label in self.labels() if "·" in label), 7)
         self.assertNotIn("page:e", str(self.card()[3])); self.assertLessEqual(len(self.labels()), 9)
         self.click_data(lambda value: value.endswith("market:M01:ТБ"))

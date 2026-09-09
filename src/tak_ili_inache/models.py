@@ -68,6 +68,10 @@ class BetResult:
     match_id: str
     winning_markets: frozenset[Market] = frozenset()
     returned_markets: frozenset[Market] = frozenset()
+    # Human-readable score entered by an administrator.  Settlement still uses
+    # canonical markets; this field exists solely so the result picker can
+    # show exactly what has already been entered.
+    score_label: str = ""
 
 
 @dataclass(frozen=True)

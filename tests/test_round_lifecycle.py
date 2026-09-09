@@ -65,8 +65,8 @@ class SmokeRoundLifecycleTests(unittest.TestCase):
     def test_new_round_upload_is_blocked_until_active_round_is_terminal(self) -> None:
         content = (ROOT / "data" / "fixtures_smoke_20260907.csv").read_bytes()
         self.bot.handle_update({"message": {"chat": {"id": 9, "type": "private"}, "from": {"id": 99}, "document": {"file_name": "fixtures_smoke_20260907.csv", "content": content}}})
-        self.assertIn("сначала завершите активный тур", self.tg.messages[-1][1])
-        self.assertNotIn("admin:activate", str(self.tg.messages[-1][2]))
+        self.assertIn("Сохранить эту линию как следующий тур", self.tg.messages[-1][1])
+        self.assertIn("admin:stage", str(self.tg.messages[-1][2]))
 
     def test_same_round_replace_remains_fail_closed_and_pending_blocks_close(self) -> None:
         self.bot.pending_imports["99"] = self.old
@@ -164,7 +164,7 @@ class MultiRoundCsvRepositoryTests(unittest.TestCase):
             # Mimic the pre-migration single-round on-disk results layout.
             path = Path(directory) / "match_results.csv"
             with path.open(encoding="utf-8", newline="") as source:
-                legacy = [{key: value for key, value in row.items() if key != "round_id"} for row in csv.DictReader(source)]
+                legacy = [{key: value for key, value in row.items() if key not in {"round_id", "score_label"}} for row in csv.DictReader(source)]
             with path.open("w", encoding="utf-8", newline="") as target:
                 writer = csv.DictWriter(target, fieldnames=["match_id", "winning_markets", "returned_markets"])
                 writer.writeheader(); writer.writerows(legacy)

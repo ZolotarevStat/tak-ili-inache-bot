@@ -6,28 +6,45 @@
 |---|---|
 | Package | `tak-ili-inache-bot` |
 | Version | `0.1.0` |
-| Release status | `ADMIN GRANTS / IN-MEMORY PNG P1 ACTIVE / PRODUCTION ACTIVATION GO` |
-| Open gate | owner grants Vitaly through `/admin` and performs bounded reporting smoke |
+| Release status | `ADMIN / CJM / LATE-CSV P1 ACTIVE / PRODUCTION ACTIVATION GO` |
+| Open gate | bounded owner smoke of late CSV, staged round, reminders and revised CJM |
 | Application MVP baseline commit | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` |
 | S3/infra publication commit | `4a3540f98f6c310c7a842caaf9679218802b15a0` |
 | Active application feature commit | `9f8c0be` on `feature/group-admin-ux-p1` |
-| Release ID | `0.1.0-admin-grants-memory-png-p1-20260828-local` |
-| Local verification at | `2026-08-28, admin grants/CAS/in-memory PNG, 197-test local package GO` |
+| Release ID | `0.1.0-admin-cjm-ops-p1-20260909-local` |
+| Local verification at | `2026-09-09, admin operations/CJM/late CSV, 199-test local package GO` |
 | Python | `3.12.7` local; `3.13.5` VDS |
-| Candidate runtime digest ×2 | `sha256:f8e059cb922bb052ef9f03a4d366ac6537777d9f12f7d177ede9efd441cdc7a1` |
-| Active VDS release | `0.1.0-admin-grants-memory-png-p1-20260828-local` |
+| Candidate runtime digest ×2 | `sha256:2f6353efadb9e880a10b0fd9358c5f3cd06915e50853083a5654c1bf5660c5a9` |
+| Active VDS release | `0.1.0-admin-cjm-ops-p1-20260909-local` |
 
-The audited local candidate adds durable fail-closed admin grants (UI, CAS,
-state-machine and migration) and PNG publication as in-memory bytes sent only
-through Telegram multipart. It never writes PNGs to disk or an S3 registry;
-existing CSV, delivery, scoring and reporting semantics are preserved. The
-independent audit found no P0/P1; focused `26/26` and full `197/197` passed.
-Immutable staging and activation succeeded. The deployed worker has PID `69581`,
-`NRestarts=0`, strict health green and memory about `19.3 MiB`. The pre-activation
-encrypted snapshot completed at `2026-08-28 02:14:39 MSK`; post-activation backup
-and freshness completed at `02:16:43–02:16:47 MSK`. Active round data was
-preserved. The remaining owner action is to grant Vitaly via the `/admin`
-administrator-management flow; no Telegram ID is recorded here.
+The audited local candidate lowers the maximum bet to `2 000`, adds durable
+00:00 and one-hour-before-deadline reminders for participants without a
+prediction, admin import of late predictions from CSV while rejecting fixtures
+already started, staging of the next round, and result buttons that show stored
+scores. It also makes express coefficients explicit in the draft/review and
+allows temporary alternative selections for one match, but blocks continuation
+and confirmation until every match is used once. The legacy 4+1 / 3+2,
+five-bet contract remains in force. Full `Ran 199 tests` / `OK`, compile, shell
+syntax, diff check, sensitive scan and deterministic digest ×2 passed locally.
+Immutable install on Python 3.13.5 repeated `199/199`, systemd verification and
+exact digest; tokenless transport canary passed `200/200`, IPv6 only, with zero
+logical failures, p95 `784 ms` and p99 `793 ms`. Transactional activation
+completed at `2026-09-09 05:25:33 MSK`; strict data/liveness/delivery health is
+green, exactly one worker is active with `NRestarts=0` and memory about
+`20.4 MiB`. Active round `20260908` and runtime data were preserved. Encrypted
+backup plus freshness passed before and after activation; post evidence was
+recorded at `05:27:32 MSK`. No automatic release prune was run.
+
+## Admin operations, late CSV and interim CJM — LOCAL+REMOTE PASS / ACTIVE
+
+| Field | Value |
+|---|---|
+| Release ID | `0.1.0-admin-cjm-ops-p1-20260909-local` |
+| Runtime digest ×2 | `sha256:2f6353efadb9e880a10b0fd9358c5f3cd06915e50853083a5654c1bf5660c5a9` |
+| Full suite | `Ran 199 tests` / `OK` locally and on remote Python 3.13.5 |
+| Transport | tokenless `200/200`, IPv6, 0 logical failures, p95 `784 ms`, p99 `793 ms` |
+| Production | transaction PASS; strict health green; active/enabled; one worker; `NRestarts=0`; active round preserved |
+| Backup | encrypted backup and freshness PASS before and after activation |
 
 The earlier staged `0.1.0-reporting-heatmaps-excel-p1-20260827-local` is
 immutable and stale and is **not** an activation target. Active round data is

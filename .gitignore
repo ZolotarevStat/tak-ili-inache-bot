@@ -28,6 +28,7 @@ drafts_runtime.json
 data/*.csv
 !data/fixtures_sample.csv
 !data/fixtures_smoke_20260907.csv
+!data/late_predictions_example.csv
 
 # Local planning, audits and provider evidence.
 task_context.md

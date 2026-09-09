@@ -7,7 +7,7 @@ from .models import BetType, Market, Prediction, Round
 
 BANK = 5_000
 BET_COUNT = 5
-MIN_STAKE, MAX_STAKE, STAKE_STEP = 500, 2_500, 50
+MIN_STAKE, MAX_STAKE, STAKE_STEP = 500, 2_000, 50
 
 
 class ValidationError(ValueError):
@@ -31,7 +31,7 @@ def validate_prediction(prediction: Prediction, round_: Round, now_msk: datetime
     used_matches: set[str] = set()
     for bet_no, bet in enumerate(prediction.bets, 1):
         if not MIN_STAKE <= bet.stake <= MAX_STAKE or bet.stake % STAKE_STEP:
-            raise ValidationError(f"Ставка {bet_no}: сумма от 500 до 2 500 с шагом 50.")
+            raise ValidationError(f"Ставка {bet_no}: сумма от 500 до 2 000 с шагом 50.")
         expected_events = 1 if bet.bet_type == BetType.SINGLE else None
         if expected_events and len(bet.events) != expected_events:
             raise ValidationError(f"Ставка {bet_no}: ординар содержит одно событие.")

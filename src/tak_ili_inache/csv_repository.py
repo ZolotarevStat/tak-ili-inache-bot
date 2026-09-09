@@ -103,6 +103,35 @@ class CsvRepository(Repository):
         row = next((item for item in rows if item.get("status", "active") == "active"), None)
         return self._round_from_row(row) if row else None
 
+    def stage_round(self, round_: Round, actor_id: str = "", imported_at: str = "") -> None:
+        """Persist one validated next line without making it active.
+
+        The staged line is intentionally isolated from historical fixtures, so
+        it cannot be selected or scored before the prior round is closed.
+        """
+        with self._locked():
+            active = self.get_active_round()
+            if active and active.round_id == round_.round_id:
+                raise ValueError("The active round cannot be staged as next.")
+            self._write_rows("staged_fixtures.csv", [self._fixture_row(item) for item in round_.fixtures])
+            self._write_rows("staged_round.csv", [self._round_row(round_)])
+            self._append_audit("round_staged", round_.round_id, actor_id, imported_at, round_.checksum)
+
+    def get_staged_round(self) -> Round | None:
+        rows = self._read_rows("staged_round.csv")
+        if len(rows) != 1:
+            return None
+        row = rows[0]
+        fixtures = tuple(self._fixture_from_row(item) for item in self._read_rows("staged_fixtures.csv"))
+        if not fixtures or any(item.round_id != row.get("round_id") for item in fixtures):
+            return None
+        return Round(row["round_id"], fixtures, datetime.fromisoformat(row["deadline_msk"]).astimezone(MOSCOW), row["checksum"])
+
+    def clear_staged_round(self) -> None:
+        with self._locked():
+            self._write_rows("staged_fixtures.csv", [])
+            self._write_rows("staged_round.csv", [])
+
     def save_prediction(self, prediction: Prediction, update_id: str = "") -> bool:
         with self._locked():
             raw = self._read_rows("submissions_raw.csv")
@@ -219,14 +248,19 @@ class CsvRepository(Repository):
             if not scoped_round:
                 raise ValueError("Round is required for result persistence.")
             rows = self._read_rows("match_results.csv")
-            row = {"round_id": scoped_round, "match_id": result.match_id, "winning_markets": json.dumps(sorted(item.value for item in result.winning_markets), ensure_ascii=False), "returned_markets": json.dumps(sorted(item.value for item in result.returned_markets), ensure_ascii=False)}
+            # Backward-compatible schema migration: historical result rows
+            # predate the human score label.  Normalize them before the first
+            # rewrite so DictWriter keeps one stable header.
+            for existing in rows:
+                existing.setdefault("score_label", "")
+            row = {"round_id": scoped_round, "match_id": result.match_id, "winning_markets": json.dumps(sorted(item.value for item in result.winning_markets), ensure_ascii=False), "returned_markets": json.dumps(sorted(item.value for item in result.returned_markets), ensure_ascii=False), "score_label": result.score_label}
             rows = [item for item in rows if not (item.get("round_id") == scoped_round and item["match_id"] == result.match_id)] + [row]
             self._write_rows("match_results.csv", rows)
 
     def results(self, round_id: str) -> tuple[BetResult, ...]:
         round_ = self.get_round(round_id)
         valid_ids = {item.match_id for item in round_.fixtures} if round_ else set()
-        return tuple(BetResult(item["match_id"], frozenset(Market(value) for value in json.loads(item["winning_markets"])), frozenset(Market(value) for value in json.loads(item["returned_markets"]))) for item in self._read_rows("match_results.csv") if item.get("round_id") == round_id and item["match_id"] in valid_ids)
+        return tuple(BetResult(item["match_id"], frozenset(Market(value) for value in json.loads(item["winning_markets"])), frozenset(Market(value) for value in json.loads(item["returned_markets"])), item.get("score_label", "")) for item in self._read_rows("match_results.csv") if item.get("round_id") == round_id and item["match_id"] in valid_ids)
 
     def raw_result_rows(self) -> list[dict[str, str]]:
         return self._read_rows("match_results.csv")
