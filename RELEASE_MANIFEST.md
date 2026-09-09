@@ -10,7 +10,7 @@
 | Open gate | bounded owner smoke of late CSV, staged round, reminders and revised CJM |
 | Application MVP baseline commit | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` |
 | S3/infra publication commit | `4a3540f98f6c310c7a842caaf9679218802b15a0` |
-| Active application feature commit | `9f8c0be` on `feature/group-admin-ux-p1` |
+| Active application feature commit | `460e404` on `feature/group-admin-ux-p1` |
 | Release ID | `0.1.0-admin-cjm-ops-p1-20260909-local` |
 | Local verification at | `2026-09-09, admin operations/CJM/late CSV, 199-test local package GO` |
 | Python | `3.12.7` local; `3.13.5` VDS |
