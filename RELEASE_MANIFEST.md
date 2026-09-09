@@ -6,16 +6,16 @@
 |---|---|
 | Package | `tak-ili-inache-bot` |
 | Version | `0.1.0` |
-| Release status | `ADMIN / CJM / LATE-CSV P1 R2 — LOCAL PACKAGE GO; REMOTE ACTIVATION PENDING` |
-| Open gate | immutable remote install, exact digest, transaction, strict health and encrypted backup |
+| Release status | `ADMIN / CJM / LATE-CSV P1 R2 — LOCAL+REMOTE PASS / ACTIVE` |
+| Open gate | owner smoke: `/admin → Формат и пример CSV` must deliver both example documents |
 | Application MVP baseline commit | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` |
 | S3/infra publication commit | `4a3540f98f6c310c7a842caaf9679218802b15a0` |
 | Active application feature commit | `79691ab` on `feature/group-admin-ux-p1` |
 | Release ID | `0.1.0-admin-cjm-ops-p1-r2-20260909-local` |
 | Local verification at | `2026-09-09, installed-wheel CSV templates, 200-test local package GO` |
 | Python | `3.12.7` local; `3.13.5` VDS |
-| Candidate runtime digest ×2 | `sha256:17b778a512ce18fd24b286191266502474463e46477b7a4ef91bd245361ce70a` |
-| Active VDS release | `0.1.0-admin-cjm-ops-p1-r1-20260909-local` |
+| Runtime digest ×2 | `sha256:17b778a512ce18fd24b286191266502474463e46477b7a4ef91bd245361ce70a` |
+| Active VDS release | `0.1.0-admin-cjm-ops-p1-r2-20260909-local` |
 
 The audited local candidate lowers the maximum bet to `2 000`, adds durable
 12:00 and one-hour-before-deadline reminders for participants without a
@@ -29,9 +29,13 @@ installed-wheel layout: the release data files are resolved from the venv's
 release root, while source-tree execution remains supported. A missing template
 now returns a controlled admin message instead of raising a delivery error.
 Targeted `13/13`, compile, diff check and deterministic digest ×2 passed; the
-full local suite contract is `Ran 200 tests` / `OK`. Remote evidence for r1
-below does not transfer to r2; r1 remains active until the new immutable gates
-and transaction pass.
+full local and remote Python 3.13.5 suite contract is `Ran 200 tests` / `OK`.
+The immutable install, exact digest, tokenless transport canary `200/200`
+(IPv6, 0 logical failures, p95 `787 ms`, p99 `1 484 ms`), transaction and
+post-start strict health passed. Production is active/enabled with one worker,
+`NRestarts=0`, about 20.4 MiB memory and active round `20260908` preserved.
+Encrypted backup passed after activation and both backup/freshness timers are
+enabled and active. Automatic lexical prune was intentionally not run.
 
 ## Admin operations, late CSV and noon-reminder r1 — LOCAL+REMOTE PASS / ACTIVE PRIOR
 

@@ -21,8 +21,11 @@ Candidate `0.1.0-admin-cjm-ops-p1-r2-20260909-local`, runtime digest ×2
 матча, но продолжение и confirm блокируются, пока на матч не останется ровно
 один исход. R1 уточняет первый reminder как полдень (`12:00 MSK`), а не
 полночь. R2 исправляет поиск обоих CSV-шаблонов из установленного wheel/venv и
-добавляет installed-layout regression. Remote r2 gates пока pending; r1
-остаётся активным production release.
+добавляет installed-layout regression. Remote Python 3.13.5 `200/200`, exact
+digest, transport canary `200/200`, transaction, strict health и encrypted
+post-deploy backup прошли; r2 является активным production release. Ручной
+owner smoke должен подтвердить отправку обоих документов через
+`/admin → Формат и пример CSV`.
 
 ## Обязательный внешний command-first canary
 

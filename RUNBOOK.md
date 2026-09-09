@@ -144,9 +144,9 @@ ssh -i ~/.ssh/<VDS_ADMIN_KEY> admin@<VDS_HOST> '
 
 ## 2. Local verification and release identity
 
-Current production release остаётся
-`0.1.0-admin-cjm-ops-p1-r1-20260909-local` до успешной r2-транзакции.
-Новый candidate `0.1.0-admin-cjm-ops-p1-r2-20260909-local` имеет suite contract
+Current production release:
+`0.1.0-admin-cjm-ops-p1-r2-20260909-local`.
+Этот release имеет suite contract
 `Ran 200 tests` / `OK` и runtime digest ×2
 `sha256:17b778a512ce18fd24b286191266502474463e46477b7a4ef91bd245361ce70a`.
 Он добавляет ceiling ставки 2 000, durable missing-pick reminders, late CSV
@@ -155,7 +155,8 @@ Current production release остаётся
 `current` in-place. R1 меняет первый reminder с полуночи на `12:00 MSK`; r2
 исправляет CSV-template resolver для установленного wheel. Immutable install,
 remote suite/digest, transport canary, transaction, strict health и encrypted
-S3 backup остаются обязательными gates. Staged
+S3 backup прошли; owner smoke отправки обоих CSV-шаблонов остаётся ручной
+проверкой. Staged
 `0.1.0-reporting-heatmaps-excel-p1-20260827-local` immutable/stale и не является
 activation target.
 
