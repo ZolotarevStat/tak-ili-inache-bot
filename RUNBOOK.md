@@ -144,18 +144,15 @@ ssh -i ~/.ssh/<VDS_ADMIN_KEY> admin@<VDS_HOST> '
 
 ## 2. Local verification and release identity
 
-Current production release:
-`0.1.0-admin-cjm-ops-p1-r2-20260909-local`.
-Этот release имеет suite contract
-`Ran 200 tests` / `OK` и runtime digest ×2
-`sha256:17b778a512ce18fd24b286191266502474463e46477b7a4ef91bd245361ce70a`.
-Он добавляет ceiling ставки 2 000, durable missing-pick reminders, late CSV
-для админа без начавшихся матчей, staging следующей линии, читаемые сохранённые
-счета и безопасный промежуточный выбор альтернатив одного матча. Не изменяйте
-`current` in-place. R1 меняет первый reminder с полуночи на `12:00 MSK`; r2
-исправляет CSV-template resolver для установленного wheel. Immutable install,
-remote suite/digest, transport canary, transaction, strict health и encrypted
-S3 backup прошли; owner smoke подтвердил отправку обоих CSV-шаблонов. Staged
+Current deployment candidate:
+`0.1.0-player-cards-preview-p1-20260909-local`.
+Он имеет локальный suite contract `Ran 209 tests` / `OK` и runtime digest ×2
+`sha256:6bc7c6f553fd30ed060d8ba0ca94786a32acad382309ad9682cca6021e7bb467`.
+Candidate добавляет только приватный admin-preview карточек игроков: PNG
+рендерятся в памяти, отправляются media groups до десяти изображений и никогда
+не публикуются в турнирную группу. Не изменяйте `current` in-place. До успешной
+транзакции active production остаётся
+`0.1.0-admin-cjm-ops-p1-r2-20260909-local`. Staged
 `0.1.0-reporting-heatmaps-excel-p1-20260827-local` immutable/stale и не является
 activation target.
 
@@ -177,7 +174,7 @@ Sensitive scan must return no matches:
 Set the release ID after the digest is recorded in the deployment evidence:
 
 ```bash
-export TII_RELEASE_ID="0.1.0-admin-cjm-ops-p1-r2-20260909-local"
+export TII_RELEASE_ID="0.1.0-player-cards-preview-p1-20260909-local"
 export TII_VDS_HOST=<VDS_HOST>
 ```
 
@@ -198,7 +195,7 @@ rsync -az --delete \
 On the VDS, install and validate before switching `current`:
 
 ```bash
-export TII_RELEASE_ID="0.1.0-admin-cjm-ops-p1-r2-20260909-local"
+export TII_RELEASE_ID="0.1.0-player-cards-preview-p1-20260909-local"
 sudo install -d -o root -g root -m 0755 "/opt/tak-ili-inache/releases/${TII_RELEASE_ID}"
 sudo rsync -a --delete \
   "/srv/tak-ili-inache/incoming/${TII_RELEASE_ID}/" \

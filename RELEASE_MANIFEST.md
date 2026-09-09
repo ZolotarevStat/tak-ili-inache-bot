@@ -6,39 +6,30 @@
 |---|---|
 | Package | `tak-ili-inache-bot` |
 | Version | `0.1.0` |
-| Release status | `ADMIN / CJM / LATE-CSV P1 R2 — LOCAL+REMOTE PASS / ACTIVE` |
-| Open gate | none for this release |
+| Release status | `PLAYER CARDS PREVIEW P1 — LOCAL PASS / REMOTE PENDING` |
+| Open gate | immutable remote install, canary, activation, strict health and backup |
 | Application MVP baseline commit | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` |
 | S3/infra publication commit | `4a3540f98f6c310c7a842caaf9679218802b15a0` |
-| Active application feature commit | `79691ab` on `feature/group-admin-ux-p1` |
-| Release ID | `0.1.0-admin-cjm-ops-p1-r2-20260909-local` |
-| Local verification at | `2026-09-09, installed-wheel CSV templates, 200-test local package GO` |
+| Active application feature commit | `c2c0011` on `feature/group-admin-ux-p1` |
+| Release ID | `0.1.0-player-cards-preview-p1-20260909-local` |
+| Local verification at | `2026-09-09, private player-card preview, 209-test local package GO` |
 | Python | `3.12.7` local; `3.13.5` VDS |
-| Runtime digest ×2 | `sha256:17b778a512ce18fd24b286191266502474463e46477b7a4ef91bd245361ce70a` |
+| Runtime digest ×2 | `sha256:6bc7c6f553fd30ed060d8ba0ca94786a32acad382309ad9682cca6021e7bb467` |
 | Active VDS release | `0.1.0-admin-cjm-ops-p1-r2-20260909-local` |
 
-The audited local candidate lowers the maximum bet to `2 000`, adds durable
-12:00 and one-hour-before-deadline reminders for participants without a
-prediction, admin import of late predictions from CSV while rejecting fixtures
-already started, staging of the next round, and result buttons that show stored
-scores. It also makes express coefficients explicit in the draft/review and
-allows temporary alternative selections for one match, but blocks continuation
-and confirmation until every match is used once. The legacy 4+1 / 3+2,
-five-bet contract remains in force. R2 fixes CSV-template lookup in the actual
-installed-wheel layout: the release data files are resolved from the venv's
-release root, while source-tree execution remains supported. A missing template
-now returns a controlled admin message instead of raising a delivery error.
-Targeted `13/13`, compile, diff check and deterministic digest ×2 passed; the
-full local and remote Python 3.13.5 suite contract is `Ran 200 tests` / `OK`.
-The immutable install, exact digest, tokenless transport canary `200/200`
-(IPv6, 0 logical failures, p95 `787 ms`, p99 `1 484 ms`), transaction and
-post-start strict health passed. Production is active/enabled with one worker,
-`NRestarts=0`, about 20.4 MiB memory and active round `20260908` preserved.
-Encrypted backup passed after activation and both backup/freshness timers are
-enabled and active. Owner smoke at `11:06 MSK` confirmed that
-`/admin → Формат и пример CSV` delivers both `fixtures_sample.csv` and
-`late_predictions_example.csv`. Automatic lexical prune was intentionally not
-run.
+The audited candidate adds an admin-only private preview of one compact
+`1080×1080` PNG per submitted player. Cards show every bet and express leg,
+partial status and payouts, the nearest prediction and a `[0, 1]` similarity
+score. Similarity is `0.70 × shared-match Jaccard + 0.30 × exact-market overlap`
+and the album order keeps locally similar predictions adjacent. PNGs are
+rendered in memory and uploaded as Telegram multipart bytes; no PNG is written
+to VDS or included in S3 backup. Albums are split into groups of at most ten,
+with one-item tails rebalanced; a genuinely single card uses `sendPhoto`.
+Preview delivery is always to the requesting admin's private chat and never to
+the tournament group. Full local suite `Ran 209 tests` / `OK`, compile, diff
+check, sensitive scan and deterministic digest ×2 passed. Remote verification,
+activation and owner visual smoke are pending. The active VDS release remains
+`0.1.0-admin-cjm-ops-p1-r2-20260909-local`; current round data is untouched.
 
 ## Admin operations, late CSV and noon-reminder r1 — LOCAL+REMOTE PASS / ACTIVE PRIOR
 
