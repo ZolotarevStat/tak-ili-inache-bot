@@ -145,14 +145,14 @@ ssh -i ~/.ssh/<VDS_ADMIN_KEY> admin@<VDS_HOST> '
 ## 2. Local verification and release identity
 
 Current candidate:
-`0.1.0-player-cards-preview-p1-r1-20260909-local`.
+`0.1.0-player-cards-preview-p1-r2-20260909-local`.
 Он имеет local suite contract `Ran 210 tests` / `OK` и runtime digest ×2
 `sha256:7d827ad7439777cc0735f5603385249dbb567c5efe8ded104e63ebbbd2866802`.
 Candidate исправляет падение приватного admin-preview на валидном купоне из
 девяти событий (`3+2`, два экспресса по три плеча). PNG рендерятся в памяти,
 отправляются media groups до десяти изображений и никогда не публикуются в
 турнирную группу. Active production prior:
-`0.1.0-player-cards-preview-p1-20260909-local`; remote gates для r1 ещё не
+`0.1.0-player-cards-preview-p1-20260909-local`; remote gates для r2 ещё не
 выполнены. Не изменяйте `current` in-place. Staged
 `0.1.0-reporting-heatmaps-excel-p1-20260827-local` immutable/stale и не является
 activation target.
@@ -175,7 +175,7 @@ Sensitive scan must return no matches:
 Set the release ID after the digest is recorded in the deployment evidence:
 
 ```bash
-export TII_RELEASE_ID="0.1.0-player-cards-preview-p1-r1-20260909-local"
+export TII_RELEASE_ID="0.1.0-player-cards-preview-p1-r2-20260909-local"
 export TII_VDS_HOST=<VDS_HOST>
 ```
 
@@ -196,7 +196,7 @@ rsync -az --delete \
 On the VDS, install and validate before switching `current`:
 
 ```bash
-export TII_RELEASE_ID="0.1.0-player-cards-preview-p1-r1-20260909-local"
+export TII_RELEASE_ID="0.1.0-player-cards-preview-p1-r2-20260909-local"
 sudo install -d -o root -g root -m 0755 "/opt/tak-ili-inache/releases/${TII_RELEASE_ID}"
 sudo rsync -a --delete \
   "/srv/tak-ili-inache/incoming/${TII_RELEASE_ID}/" \

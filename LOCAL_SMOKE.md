@@ -12,7 +12,7 @@ PYTHONPATH=src python3 -m tak_ili_inache.polling
 ```
 
 Локальный suite нового candidate завершился как `Ran 210 tests` и `OK`.
-Candidate `0.1.0-player-cards-preview-p1-r1-20260909-local`, runtime digest ×2
+Candidate `0.1.0-player-cards-preview-p1-r2-20260909-local`, runtime digest ×2
 `sha256:7d827ad7439777cc0735f5603385249dbb567c5efe8ded104e63ebbbd2866802`,
 исправляет падение приватного admin-preview на валидном купоне из девяти
 событий (`3+2`, два экспресса по три плеча).
@@ -21,7 +21,7 @@ Candidate `0.1.0-player-cards-preview-p1-r1-20260909-local`, runtime digest ×2
 близости, рендерятся только в памяти и отправляются батчами до десяти PNG;
 турнирная группа не используется. Remote Python 3.13.5, exact digest,
 tokenless canary, encrypted pre/post backup, activation transaction и strict
-health для r1 pending. Active production prior — preview p1 без r1.
+health для r2 pending. Active production prior — preview p1 без r2.
 
 ### Private player-card preview
 

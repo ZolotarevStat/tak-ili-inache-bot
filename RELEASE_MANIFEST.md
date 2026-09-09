@@ -6,12 +6,12 @@
 |---|---|
 | Package | `tak-ili-inache-bot` |
 | Version | `0.1.0` |
-| Release status | `PLAYER CARDS PREVIEW P1 R1 — LOCAL PASS / CANDIDATE` |
+| Release status | `PLAYER CARDS PREVIEW P1 R2 — LOCAL PASS / CANDIDATE` |
 | Open gate | remote immutable install, activation, strict health and owner retry |
 | Application MVP baseline commit | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` |
 | S3/infra publication commit | `4a3540f98f6c310c7a842caaf9679218802b15a0` |
 | Active application feature commit | `8f075e4` on `feature/group-admin-ux-p1` |
-| Release ID | `0.1.0-player-cards-preview-p1-r1-20260909-local` |
+| Release ID | `0.1.0-player-cards-preview-p1-r2-20260909-local` |
 | Local verification at | `2026-09-09, nine-event player-card regression, 210-test local package GO` |
 | Python | `3.12.7` local; `3.13.5` VDS |
 | Runtime digest ×2 | `sha256:7d827ad7439777cc0735f5603385249dbb567c5efe8ded104e63ebbbd2866802` |
@@ -19,7 +19,7 @@
 
 The prior production preview received the owner's callback but failed before
 any media call: its fixed geometry overflowed on the valid nine-event shape
-`3 singles + 2 × 3-leg express`. R1 adaptively compacts that shape, keeps all
+`3 singles + 2 × 3-leg express`. R2 adaptively compacts that shape, keeps all
 events clear of the nearest-neighbour footer, and moves coefficient plus payout
 into each bet header so the first event cannot overlap them. A controlled
 admin-facing error now replaces a silent handler failure if rendering fails.
@@ -27,6 +27,11 @@ The new nine-event render regression, full local `Ran 210 tests` / `OK`,
 compile, visual inspection, diff check and deterministic digest ×2 passed.
 Production remains on the prior release until the immutable remote gates and
 transaction complete. PNG remains in-memory-only and private.
+
+The first immutable fix ID (`...-r1-20260909-local`) was not activated: its
+remote suite failed because the deliberately narrow upload package omitted the
+test-only `infra/` contract fixtures. R2 includes that verification directory;
+runtime code and digest are unchanged.
 
 ## Admin operations, late CSV and noon-reminder r1 — LOCAL+REMOTE PASS / ACTIVE PRIOR
 
