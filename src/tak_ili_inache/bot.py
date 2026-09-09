@@ -12,6 +12,7 @@ import hmac
 import logging
 import os
 import secrets
+import sys
 from itertools import permutations
 from typing import Callable
 
@@ -38,6 +39,23 @@ from .validators import BANK, MAX_STAKE, MIN_STAKE, STAKE_STEP, ValidationError,
 
 PRIVATE_TYPES = {"private"}
 _reanchor_context: ContextVar[tuple[str, str, str] | None] = ContextVar("cjm_reanchor_context", default=None)
+
+
+def _release_data_path(
+    filename: str,
+    *,
+    module_file: str | Path = __file__,
+    runtime_prefix: str | Path = sys.prefix,
+    working_directory: str | Path | None = None,
+) -> Path:
+    """Resolve release data both from the source tree and an installed venv."""
+    module_root = Path(module_file).resolve().parents[2]
+    roots = (module_root, Path(runtime_prefix).resolve().parent, Path(working_directory or Path.cwd()).resolve())
+    for root in roots:
+        candidate = root / "data" / filename
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError(filename)
 
 
 class _BestEffortTelegram:
@@ -745,8 +763,12 @@ class BotService:
         if not self._is_admin(telegram_id):
             self.telegram.send_message(chat_id, "Недостаточно прав.")
             return
-        template = Path(__file__).resolve().parents[2] / "data" / "fixtures_sample.csv"
-        late_template = Path(__file__).resolve().parents[2] / "data" / "late_predictions_example.csv"
+        try:
+            template = _release_data_path("fixtures_sample.csv")
+            late_template = _release_data_path("late_predictions_example.csv")
+        except FileNotFoundError:
+            self.telegram.send_message(chat_id, "Шаблоны CSV временно недоступны. Сообщите администратору сервера.")
+            return
         self.telegram.send_message(chat_id, "CSV: 11–14 матчей одного round_id. Обязательные колонки: round_id, match_id, kickoff_msk (ISO с timezone или МСК), home_team, away_team, total_line, odds_p1, odds_x, odds_p2, odds_tb, odds_tm, odds_1x, odds_x2. Коэффициенты — конечные Decimal > 1. Ниже — валидный пример, замените его данными тура.")
         self.telegram.send_document(chat_id, str(template), "fixtures_example.csv")
         self.telegram.send_document(chat_id, str(late_template), "late_predictions_example.csv")

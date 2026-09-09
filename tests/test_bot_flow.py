@@ -6,7 +6,7 @@ from datetime import timedelta
 from pathlib import Path
 import tempfile
 
-from tak_ili_inache.bot import BotService
+from tak_ili_inache.bot import BotService, _release_data_path
 from tak_ili_inache.fake_repository import FakeRepository
 from tak_ili_inache.fixtures import import_fixtures
 
@@ -83,6 +83,7 @@ class BotFlowTests(unittest.TestCase):
         self.assertIn("Проверьте прогноз", self.tg.messages[-1][1])
         self._callback("confirm")
         participant = self.repo.get_participant("42")
+
         self.assertEqual(len(self.repo.raw_predictions()), 1)
         self.assertEqual(len(self.repo.get_prediction("R1", participant.participant_id).bets), 5)
         self._message("/my")
@@ -104,6 +105,21 @@ class BotFlowTests(unittest.TestCase):
         self._callback("cancel")
         self._callback("cancel:yes")
         self.assertGreater(len(self.tg.cleared), 0)
+
+    def test_csv_template_resolver_supports_installed_venv_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release = Path(directory)
+            template = release / "data" / "late_predictions_example.csv"
+            template.parent.mkdir()
+            template.write_text("round_id\n", encoding="utf-8")
+            installed_module = release / ".venv/lib/python3.13/site-packages/tak_ili_inache/bot.py"
+            resolved = _release_data_path(
+                "late_predictions_example.csv",
+                module_file=installed_module,
+                runtime_prefix=release / ".venv",
+                working_directory=release / "unrelated",
+            )
+            self.assertEqual(resolved, template.resolve())
 
     def test_group_blocks_sensitive_actions_and_deadline_blocks_replace(self) -> None:
         self.bot.handle_update({"message": {"chat": {"id": -9, "type": "group"}, "from": {"id": 42, "first_name": "Т"}, "text": "/start"}})

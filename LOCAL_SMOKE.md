@@ -11,19 +11,18 @@ export TELEGRAM_BOT_TOKEN='<TEST_BOT_TOKEN>'
 PYTHONPATH=src python3 -m tak_ili_inache.polling
 ```
 
-Локальный suite нового candidate завершился как `Ran 199 tests` и `OK`.
-Candidate `0.1.0-admin-cjm-ops-p1-r1-20260909-local`, runtime digest ×2
-`sha256:3a25fe906e43e8cb9c88325a9f8d1372f71ffd1fe63c424c473adc9f0d81d8d2`,
+Локальный suite нового candidate завершился как `Ran 200 tests` и `OK`.
+Candidate `0.1.0-admin-cjm-ops-p1-r2-20260909-local`, runtime digest ×2
+`sha256:17b778a512ce18fd24b286191266502474463e46477b7a4ef91bd245361ce70a`,
 снижает максимум ставки до 2 000, добавляет reminders в 12:00 дня дедлайна и
 за час до него только несдавшим, late-CSV для администратора с запретом уже
 начавшихся матчей, staging следующего тура и подписи сохранённых счетов в
 админском вводе результатов. В CJM временно разрешены альтернативы одного
 матча, но продолжение и confirm блокируются, пока на матч не останется ровно
 один исход. R1 уточняет первый reminder как полдень (`12:00 MSK`), а не
-полночь. Remote Python 3.13.5 `199/199`, exact digest, transport canary
-`200/200`, transactional activation, strict health и encrypted
-backup/freshness до и после activation прошли. R1 активен; bounded owner
-product-smoke остаётся отдельной проверкой.
+полночь. R2 исправляет поиск обоих CSV-шаблонов из установленного wheel/venv и
+добавляет installed-layout regression. Remote r2 gates пока pending; r1
+остаётся активным production release.
 
 ## Обязательный внешний command-first canary
 
