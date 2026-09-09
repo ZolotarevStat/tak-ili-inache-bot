@@ -18,6 +18,12 @@ CARD_HEIGHT = 1080
 BET_TOP = 280
 BET_GAP = 8
 FOOTER_TOP = 913
+REGULAR_BET_BASE = 78
+REGULAR_EVENT_STEP = 26
+REGULAR_EVENT_OFFSET = 53
+COMPACT_BET_BASE = 66
+COMPACT_EVENT_STEP = 22
+COMPACT_EVENT_OFFSET = 48
 MATCH_WEIGHT = Decimal("0.70")
 OUTCOME_WEIGHT = Decimal("0.30")
 STATUS_LABELS = {
@@ -177,15 +183,29 @@ def build_player_cards(
 
 def card_bet_boxes(prediction: Prediction) -> tuple[tuple[int, int], ...]:
     """Return compact non-overlapping vertical boxes for every bet."""
+    boxes, _, _ = _card_bet_layout(prediction)
+    return boxes
+
+
+def _card_bet_layout(prediction: Prediction) -> tuple[tuple[tuple[int, int], ...], int, int]:
+    """Choose the roomiest layout that still supports every valid coupon shape."""
+    event_counts = [max(1, len(bet.events)) for bet in prediction.bets]
+    available = FOOTER_TOP - 24 - BET_TOP
+    gaps = BET_GAP * max(0, len(event_counts) - 1)
+    preferred = sum(REGULAR_BET_BASE + REGULAR_EVENT_STEP * count for count in event_counts) + gaps
+    if preferred <= available:
+        base, event_step, event_offset = REGULAR_BET_BASE, REGULAR_EVENT_STEP, REGULAR_EVENT_OFFSET
+    else:
+        base, event_step, event_offset = COMPACT_BET_BASE, COMPACT_EVENT_STEP, COMPACT_EVENT_OFFSET
     boxes = []
     top = BET_TOP
-    for bet in prediction.bets:
-        height = 78 + 26 * max(1, len(bet.events))
+    for event_count in event_counts:
+        height = base + event_step * event_count
         boxes.append((top, top + height))
         top += height + BET_GAP
     if boxes and boxes[-1][1] > FOOTER_TOP - 24:
         raise AssertionError("bet cards overlap the nearest-neighbour footer")
-    return tuple(boxes)
+    return tuple(boxes), event_offset, event_step
 
 
 def _render_card(
@@ -219,14 +239,14 @@ def _render_card(
         f"{board.winning_bets} / {board.losing_bets} / {board.pending_bets}", "#62A5F5", fonts,
     )
 
-    for bet_no, (bet, (y, block_bottom)) in enumerate(zip(prediction.bets, card_bet_boxes(prediction)), 1):
+    bet_boxes, event_offset, event_step = _card_bet_layout(prediction)
+    for bet_no, (bet, (y, block_bottom)) in enumerate(zip(prediction.bets, bet_boxes), 1):
         item = scored[(prediction.participant_id, bet_no)]
         color = STATUS_COLORS[item.status]
         draw.rounded_rectangle((62, y, 1018, block_bottom), radius=22, fill="#20293A")
         draw.rounded_rectangle((62, y, 72, block_bottom), radius=5, fill=color)
         kind = "ОРДИНАР" if bet.bet_type == BetType.SINGLE else "ЭКСПРЕСС"
         draw.text((92, y + 12), f"{bet_no}. {kind}  ·  {bet.stake} р.", font=fonts["bet"], fill="#F7F9FC")
-        draw.text((610, y + 14), f"кэф {_fmt_decimal(_combined_odds(bet))}", font=fonts["body_bold"], fill="#D7DEEA")
         badge = STATUS_LABELS[item.status]
         badge_width = fonts["small_bold"].getlength(badge) + 30
         draw.rounded_rectangle((985 - badge_width, y + 10, 1000, y + 44), radius=12, fill=color)
@@ -236,16 +256,17 @@ def _render_card(
             else f"до {item.maximum_payout:,} р." if item.status == "pending"
             else "выплата 0 р."
         ).replace(",", " ")
-        payout_width = fonts["small_bold"].getlength(payout)
+        odds_and_payout = f"кэф {_fmt_decimal(_combined_odds(bet))} · {payout}"
+        odds_width = fonts["small_bold"].getlength(odds_and_payout)
+        draw.text((965 - badge_width - odds_width, y + 17), odds_and_payout, font=fonts["small_bold"], fill=color)
         for event_no, (event, event_status) in enumerate(zip(bet.events, item.event_statuses)):
             fixture = fixtures[event.match_id]
             label = f"{fixture.home_team} — {fixture.away_team}"
             market = event.market.value + (f" {event.total_line_snapshot}" if event.total_line_snapshot is not None else "")
-            row_y = y + 53 + event_no * 26
+            row_y = y + event_offset + event_no * event_step
             draw.ellipse((94, row_y + 5, 108, row_y + 19), fill=STATUS_COLORS[event_status])
             draw.text((123, row_y), _fit(label, 34), font=fonts["small"], fill="#DDE4EF")
             draw.text((590, row_y), f"{market} · {event.odds_snapshot}", font=fonts["small"], fill="#AEBBD0")
-        draw.text((1000 - payout_width, y + 55), payout, font=fonts["small_bold"], fill=color)
 
     draw.text((70, FOOTER_TOP), "БЛИЖАЙШИЙ ПРОГНОЗ", font=fonts["tiny_bold"], fill="#8493AC")
     neighbour_line = f"{_fit(neighbour_name, 22)}  ·  {neighbour_score:.2f}"

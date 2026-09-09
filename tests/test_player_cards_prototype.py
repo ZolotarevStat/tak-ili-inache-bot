@@ -21,7 +21,7 @@ from tak_ili_inache.player_cards import (
     similarity_order,
 )
 from tak_ili_inache.fixtures import import_fixtures
-from tak_ili_inache.models import Bet, BetEvent, BetType, Market, Prediction
+from tak_ili_inache.models import Bet, BetEvent, BetType, Market, Participant, Prediction
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,6 +42,35 @@ def prediction(participant_id: str, indexes: tuple[int, ...], markets: tuple[Mar
         ROUND.round_id,
         participant_id,
         tuple(Bet(BetType.SINGLE, 1000, (event,)) for event in events),
+        ROUND.deadline_msk,
+    )
+
+
+def nine_event_prediction(participant_id: str = "nine") -> Prediction:
+    events = []
+    markets = (
+        Market.P1, Market.X, Market.P2,
+        Market.TB, Market.ONE_X, Market.TM,
+        Market.X_TWO, Market.P1, Market.X,
+    )
+    for fixture_index, market in enumerate(markets):
+        fixture = ROUND.fixtures[fixture_index]
+        events.append(BetEvent(
+            fixture.match_id,
+            market,
+            fixture.odds[market],
+            fixture.total_line if market in {Market.TB, Market.TM} else None,
+        ))
+    return Prediction(
+        ROUND.round_id,
+        participant_id,
+        (
+            Bet(BetType.SINGLE, 700, (events[0],)),
+            Bet(BetType.SINGLE, 700, (events[1],)),
+            Bet(BetType.SINGLE, 700, (events[2],)),
+            Bet(BetType.EXPRESS, 1400, tuple(events[3:6])),
+            Bet(BetType.EXPRESS, 1500, tuple(events[6:9])),
+        ),
         ROUND.deadline_msk,
     )
 
@@ -94,6 +123,23 @@ class PlayerCardsPrototypeTests(unittest.TestCase):
         self.assertEqual(len(boxes), 5)
         self.assertTrue(all(first[1] < second[0] for first, second in zip(boxes, boxes[1:])))
         self.assertLessEqual(boxes[-1][1], FOOTER_TOP - 24)
+
+    def test_valid_nine_event_coupon_renders_without_footer_overlap(self) -> None:
+        item = nine_event_prediction()
+        boxes = card_bet_boxes(item)
+        self.assertEqual(len(boxes), 5)
+        self.assertTrue(all(first[1] < second[0] for first, second in zip(boxes, boxes[1:])))
+        self.assertLessEqual(boxes[-1][1], FOOTER_TOP - 24)
+        cards = build_player_cards(
+            ROUND,
+            (item,),
+            (),
+            (Participant(item.participant_id, "999", "Девять событий"),),
+        )
+        self.assertEqual(len(cards), 1)
+        with Image.open(BytesIO(cards[0].content)) as image:
+            self.assertEqual(image.size, (CARD_WIDTH, CARD_HEIGHT))
+            image.verify()
 
     def test_demo_writes_cards_previews_and_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

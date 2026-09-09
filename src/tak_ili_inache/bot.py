@@ -1098,9 +1098,22 @@ class BotService:
         if not predictions:
             self.telegram.send_message(chat_id, "В активном туре пока нет подтверждённых прогнозов.")
             return
-        cards = build_player_cards(
-            round_, predictions, self.repository.results(round_.round_id), self.repository.participants()
-        )
+        try:
+            cards = build_player_cards(
+                round_, predictions, self.repository.results(round_.round_id), self.repository.participants()
+            )
+        except Exception as error:
+            logging.getLogger(__name__).exception(
+                "player_cards_preview_failed round_id=%s error_type=%s",
+                round_.round_id,
+                type(error).__name__,
+            )
+            self.telegram.send_message(
+                chat_id,
+                f"Не удалось собрать карточки ({type(error).__name__}). Ошибка записана в журнал; попробуйте ещё раз после обновления.",
+                _keyboard([("Назад в админ-меню", "admin:menu")]),
+            )
+            return
         batches = media_batches(cards)
         for batch_no, batch in enumerate(batches, 1):
             caption = f"Тур {round_.round_id} · карточки игроков · батч {batch_no}/{len(batches)}"
