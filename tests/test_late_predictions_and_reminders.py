@@ -21,7 +21,7 @@ class LatePredictionsAndRemindersTests(unittest.TestCase):
         self.repo = FakeRepository(); self.repo.save_round(self.round_)
         self.player = self.repo.register_participant("42", "Игрок")
 
-    def test_late_csv_uses_registered_name_and_rejects_started_fixture(self) -> None:
+    def test_late_csv_uses_registered_name_and_accepts_admin_approved_started_fixture(self) -> None:
         now = self.round_.deadline_msk + timedelta(minutes=1)
         content = (
             "round_id,display_name,bet_no,bet_type,stake,match_id,market\n"
@@ -32,8 +32,8 @@ class LatePredictionsAndRemindersTests(unittest.TestCase):
         imported = import_late_predictions(content, self.round_, self.repo.participants(), now)
         self.assertEqual((len(imported), imported[0].participant_id, len(imported[0].bets)), (1, self.player.participant_id, 5))
         started = content.replace(b"M02", b"M01", 1)
-        with self.assertRaisesRegex(ValidationError, "уже начался"):
-            import_late_predictions(started, self.round_, self.repo.participants(), now)
+        approved = import_late_predictions(started, self.round_, self.repo.participants(), now)
+        self.assertEqual(approved[0].bets[0].events[0].match_id, "M01")
 
     def test_reminders_are_sent_once_only_to_missing_people(self) -> None:
         other = self.repo.register_participant("43", "Не сдал")

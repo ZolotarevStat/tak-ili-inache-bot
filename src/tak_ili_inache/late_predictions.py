@@ -15,7 +15,7 @@ REQUIRED_FIELDS = {"round_id", "display_name", "bet_no", "bet_type", "stake", "m
 
 
 def import_late_predictions(content: bytes, round_: Round, participants: tuple[Participant, ...], now: datetime) -> tuple[Prediction, ...]:
-    """Parse a CSV without Telegram IDs and accept only not-yet-started events."""
+    """Parse an administrator-approved post-deadline CSV without Telegram IDs."""
     if now < round_.deadline_msk:
         raise ValidationError("Late CSV доступен только после общего дедлайна.")
     try:
@@ -68,8 +68,6 @@ def import_late_predictions(content: bytes, round_: Round, participants: tuple[P
                 fixture = fixtures.get(row["match_id"])
                 if not fixture:
                     raise ValidationError(f"Участник {participant_id}: неизвестный матч {row['match_id']}.")
-                if fixture.kickoff_msk <= now:
-                    raise ValidationError(f"Участник {participant_id}: матч {fixture.home_team} — {fixture.away_team} уже начался.")
                 try:
                     market = Market(row["market"])
                 except ValueError as error:
@@ -81,8 +79,9 @@ def import_late_predictions(content: bytes, round_: Round, participants: tuple[P
             bets.append(Bet(bet_type, stake, tuple(events)))
         prediction = Prediction(round_.round_id, participant_id, tuple(bets), now)
         # Reuse every normal betting invariant but deliberately evaluate the
-        # deadline guard at the last instant before it; the explicit kickoff
-        # check above is the late-entry policy.
+        # deadline guard at the last instant before it. Timeliness of a late
+        # CSV is an admin decision: the player may have submitted before the
+        # deadline while the organizer processes the file later.
         validate_prediction(prediction, round_, round_.deadline_msk - timedelta(microseconds=1))
         predictions.append(prediction)
     return tuple(predictions)

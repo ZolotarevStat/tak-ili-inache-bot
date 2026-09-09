@@ -557,7 +557,7 @@ class BotService:
             logging.getLogger(__name__).exception("late_csv_import_failed")
             self.telegram.send_message(chat_id, "Не удалось обработать Late CSV. Отправьте файл повторно.")
             return
-        self.telegram.send_message(chat_id, f"Late CSV принят: добавлено прогнозов — {len(predictions)}. Матчи, которые уже начались, не принимаются.")
+        self.telegram.send_message(chat_id, f"Late CSV принят: добавлено прогнозов — {len(predictions)}. Администратор подтвердил своевременность исходной отправки.")
 
     def _is_admin(self, telegram_id: str) -> bool:
         return telegram_id in self.admin_ids or any(item.telegram_id == telegram_id for item in self.repository.active_admin_grants())
@@ -813,7 +813,7 @@ class BotService:
         self.telegram.send_message(chat_id, "CSV: 11–14 матчей одного round_id. Обязательные колонки: round_id, match_id, kickoff_msk (ISO с timezone или МСК), home_team, away_team, total_line, odds_p1, odds_x, odds_p2, odds_tb, odds_tm, odds_1x, odds_x2. Коэффициенты — конечные Decimal > 1. Ниже — валидный пример, замените его данными тура.")
         self.telegram.send_document(chat_id, str(template), "fixtures_example.csv")
         self.telegram.send_document(chat_id, str(late_template), "late_predictions_example.csv")
-        self.telegram.send_message(chat_id, "Для опоздавших используйте второй шаблон: укажите точное display_name зарегистрированного участника и отправьте файл с именем late_predictions.csv после дедлайна. Уже начавшиеся матчи и существующие прогнозы отклоняются. После подготовки отправьте CSV документом сюда.", _keyboard([("Назад в админ-меню", "admin:menu")]))
+        self.telegram.send_message(chat_id, "Для опоздавших используйте второй шаблон: укажите точное display_name зарегистрированного участника и отправьте файл с именем late_predictions.csv после дедлайна. Импорт подтверждает решение администратора о своевременности исходной отправки; существующие прогнозы не перезаписываются. После подготовки отправьте CSV документом сюда.", _keyboard([("Назад в админ-меню", "admin:menu")]))
 
     def _outbox_menu(self, chat_id: int, telegram_id: str) -> None:
         if not self._is_admin(telegram_id):
