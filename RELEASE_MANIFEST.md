@@ -6,34 +6,27 @@
 |---|---|
 | Package | `tak-ili-inache-bot` |
 | Version | `0.1.0` |
-| Release status | `PLAYER CARDS PREVIEW P1 — LOCAL+REMOTE PASS / ACTIVE` |
-| Open gate | owner visual smoke of the private albums |
+| Release status | `PLAYER CARDS PREVIEW P1 R1 — LOCAL PASS / CANDIDATE` |
+| Open gate | remote immutable install, activation, strict health and owner retry |
 | Application MVP baseline commit | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` |
 | S3/infra publication commit | `4a3540f98f6c310c7a842caaf9679218802b15a0` |
-| Active application feature commit | `c2c0011` on `feature/group-admin-ux-p1` |
-| Release ID | `0.1.0-player-cards-preview-p1-20260909-local` |
-| Local verification at | `2026-09-09, private player-card preview, 209-test local package GO` |
+| Active application feature commit | `8f075e4` on `feature/group-admin-ux-p1` |
+| Release ID | `0.1.0-player-cards-preview-p1-r1-20260909-local` |
+| Local verification at | `2026-09-09, nine-event player-card regression, 210-test local package GO` |
 | Python | `3.12.7` local; `3.13.5` VDS |
-| Runtime digest ×2 | `sha256:6bc7c6f553fd30ed060d8ba0ca94786a32acad382309ad9682cca6021e7bb467` |
+| Runtime digest ×2 | `sha256:7d827ad7439777cc0735f5603385249dbb567c5efe8ded104e63ebbbd2866802` |
 | Active VDS release | `0.1.0-player-cards-preview-p1-20260909-local` |
 
-The audited candidate adds an admin-only private preview of one compact
-`1080×1080` PNG per submitted player. Cards show every bet and express leg,
-partial status and payouts, the nearest prediction and a `[0, 1]` similarity
-score. Similarity is `0.70 × shared-match Jaccard + 0.30 × exact-market overlap`
-and the album order keeps locally similar predictions adjacent. PNGs are
-rendered in memory and uploaded as Telegram multipart bytes; no PNG is written
-to VDS or included in S3 backup. Albums are split into groups of at most ten,
-with one-item tails rebalanced; a genuinely single card uses `sendPhoto`.
-Preview delivery is always to the requesting admin's private chat and never to
-the tournament group. Full local and remote Python 3.13.5 suite
-`Ran 209 tests` / `OK`, compile, diff check, sensitive scan and exact
-deterministic digest passed. Tokenless transport canary passed `200/200` over
-IPv6 with zero logical failures, p95 `788 ms` and p99 `800 ms`. Encrypted
-pre/post backups passed, the activation transaction completed, and strict
-data/liveness/delivery health is green. Production is active/enabled with one
-worker, `NRestarts=0`, about 20.5 MiB memory and active round `20260908`
-preserved. Owner visual smoke is pending. Automatic lexical prune was not run.
+The prior production preview received the owner's callback but failed before
+any media call: its fixed geometry overflowed on the valid nine-event shape
+`3 singles + 2 × 3-leg express`. R1 adaptively compacts that shape, keeps all
+events clear of the nearest-neighbour footer, and moves coefficient plus payout
+into each bet header so the first event cannot overlap them. A controlled
+admin-facing error now replaces a silent handler failure if rendering fails.
+The new nine-event render regression, full local `Ran 210 tests` / `OK`,
+compile, visual inspection, diff check and deterministic digest ×2 passed.
+Production remains on the prior release until the immutable remote gates and
+transaction complete. PNG remains in-memory-only and private.
 
 ## Admin operations, late CSV and noon-reminder r1 — LOCAL+REMOTE PASS / ACTIVE PRIOR
 

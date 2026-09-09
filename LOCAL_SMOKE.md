@@ -11,17 +11,17 @@ export TELEGRAM_BOT_TOKEN='<TEST_BOT_TOKEN>'
 PYTHONPATH=src python3 -m tak_ili_inache.polling
 ```
 
-Локальный suite нового candidate завершился как `Ran 209 tests` и `OK`.
-Candidate `0.1.0-player-cards-preview-p1-20260909-local`, runtime digest ×2
-`sha256:6bc7c6f553fd30ed060d8ba0ca94786a32acad382309ad9682cca6021e7bb467`,
-добавляет приватный admin-preview карточек всех сдавших игроков текущего тура.
+Локальный suite нового candidate завершился как `Ran 210 tests` и `OK`.
+Candidate `0.1.0-player-cards-preview-p1-r1-20260909-local`, runtime digest ×2
+`sha256:7d827ad7439777cc0735f5603385249dbb567c5efe8ded104e63ebbbd2866802`,
+исправляет падение приватного admin-preview на валидном купоне из девяти
+событий (`3+2`, два экспресса по три плеча).
 Карточки `1080×1080` показывают ставки, плечи экспрессов, текущие статусы и
 выплаты, ближайший прогноз и скор близости `[0, 1]`. Они сортируются по
 близости, рендерятся только в памяти и отправляются батчами до десяти PNG;
-турнирная группа не используется. Remote Python 3.13.5 `209/209`, exact digest,
-tokenless canary `200/200`, encrypted pre/post backup, activation transaction и
-strict health прошли. Candidate является active production release; ручной
-visual smoke остаётся за владельцем.
+турнирная группа не используется. Remote Python 3.13.5, exact digest,
+tokenless canary, encrypted pre/post backup, activation transaction и strict
+health для r1 pending. Active production prior — preview p1 без r1.
 
 ### Private player-card preview
 
