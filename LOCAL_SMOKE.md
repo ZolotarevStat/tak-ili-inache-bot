@@ -20,8 +20,10 @@ Candidate `0.1.0-admin-cjm-ops-p1-r1-20260909-local`, runtime digest ×2
 админском вводе результатов. В CJM временно разрешены альтернативы одного
 матча, но продолжение и confirm блокируются, пока на матч не останется ровно
 один исход. R1 уточняет первый reminder как полдень (`12:00 MSK`), а не
-полночь. Remote install, transport canary, activation, strict health и backup
-для r1 пока pending; активным остаётся предыдущий release.
+полночь. Remote Python 3.13.5 `199/199`, exact digest, transport canary
+`200/200`, transactional activation, strict health и encrypted
+backup/freshness до и после activation прошли. R1 активен; bounded owner
+product-smoke остаётся отдельной проверкой.
 
 ## Обязательный внешний command-first canary
 
