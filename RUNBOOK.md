@@ -144,15 +144,16 @@ ssh -i ~/.ssh/<VDS_ADMIN_KEY> admin@<VDS_HOST> '
 
 ## 2. Local verification and release identity
 
-Current deployment candidate:
+Current production release:
 `0.1.0-player-cards-preview-p1-20260909-local`.
-Он имеет локальный suite contract `Ran 209 tests` / `OK` и runtime digest ×2
+Он имеет локальный и remote suite contract `Ran 209 tests` / `OK` и runtime digest ×2
 `sha256:6bc7c6f553fd30ed060d8ba0ca94786a32acad382309ad9682cca6021e7bb467`.
 Candidate добавляет только приватный admin-preview карточек игроков: PNG
 рендерятся в памяти, отправляются media groups до десяти изображений и никогда
-не публикуются в турнирную группу. Не изменяйте `current` in-place. До успешной
-транзакции active production остаётся
-`0.1.0-admin-cjm-ops-p1-r2-20260909-local`. Staged
+не публикуются в турнирную группу. Immutable install, canary `200/200`,
+encrypted pre/post backup, activation transaction и strict health прошли;
+production active/enabled с одним worker и `NRestarts=0`. Owner visual smoke
+остаётся открытым. Не изменяйте `current` in-place. Staged
 `0.1.0-reporting-heatmaps-excel-p1-20260827-local` immutable/stale и не является
 activation target.
 

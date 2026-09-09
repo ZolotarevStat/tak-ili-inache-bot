@@ -6,8 +6,8 @@
 |---|---|
 | Package | `tak-ili-inache-bot` |
 | Version | `0.1.0` |
-| Release status | `PLAYER CARDS PREVIEW P1 — LOCAL PASS / REMOTE PENDING` |
-| Open gate | immutable remote install, canary, activation, strict health and backup |
+| Release status | `PLAYER CARDS PREVIEW P1 — LOCAL+REMOTE PASS / ACTIVE` |
+| Open gate | owner visual smoke of the private albums |
 | Application MVP baseline commit | `cf778ea4a01bef40079f745ae3d38230f5c3e5a3` |
 | S3/infra publication commit | `4a3540f98f6c310c7a842caaf9679218802b15a0` |
 | Active application feature commit | `c2c0011` on `feature/group-admin-ux-p1` |
@@ -15,7 +15,7 @@
 | Local verification at | `2026-09-09, private player-card preview, 209-test local package GO` |
 | Python | `3.12.7` local; `3.13.5` VDS |
 | Runtime digest ×2 | `sha256:6bc7c6f553fd30ed060d8ba0ca94786a32acad382309ad9682cca6021e7bb467` |
-| Active VDS release | `0.1.0-admin-cjm-ops-p1-r2-20260909-local` |
+| Active VDS release | `0.1.0-player-cards-preview-p1-20260909-local` |
 
 The audited candidate adds an admin-only private preview of one compact
 `1080×1080` PNG per submitted player. Cards show every bet and express leg,
@@ -26,10 +26,14 @@ rendered in memory and uploaded as Telegram multipart bytes; no PNG is written
 to VDS or included in S3 backup. Albums are split into groups of at most ten,
 with one-item tails rebalanced; a genuinely single card uses `sendPhoto`.
 Preview delivery is always to the requesting admin's private chat and never to
-the tournament group. Full local suite `Ran 209 tests` / `OK`, compile, diff
-check, sensitive scan and deterministic digest ×2 passed. Remote verification,
-activation and owner visual smoke are pending. The active VDS release remains
-`0.1.0-admin-cjm-ops-p1-r2-20260909-local`; current round data is untouched.
+the tournament group. Full local and remote Python 3.13.5 suite
+`Ran 209 tests` / `OK`, compile, diff check, sensitive scan and exact
+deterministic digest passed. Tokenless transport canary passed `200/200` over
+IPv6 with zero logical failures, p95 `788 ms` and p99 `800 ms`. Encrypted
+pre/post backups passed, the activation transaction completed, and strict
+data/liveness/delivery health is green. Production is active/enabled with one
+worker, `NRestarts=0`, about 20.5 MiB memory and active round `20260908`
+preserved. Owner visual smoke is pending. Automatic lexical prune was not run.
 
 ## Admin operations, late CSV and noon-reminder r1 — LOCAL+REMOTE PASS / ACTIVE PRIOR
 
